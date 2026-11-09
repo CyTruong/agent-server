@@ -10,8 +10,12 @@ không chắc người nhận hoặc không biết nội dung.
    **DỪNG và HỎI** ("Bạn muốn gửi cho ai trong Zalo?"). Không tự bịa liên hệ cùng tên.
 1. Làm theo skill **mở cuộc trò chuyện**. **BẮT BUỘC** mở được khung của ĐÚNG người
    rồi mới gõ. Không tìm thấy → **DỪNG và HỎI**, KHÔNG gõ vào khung đang mở sẵn.
-2. Nội dung: dùng ĐÚNG nội dung người dùng đưa; nếu chung chung ("gửi lời chào"),
-   soạn một câu ngắn phù hợp các tin gần nhất ở đáy khung. Viết trên MỘT dòng.
+2. Nội dung: dùng ĐÚNG nội dung người dùng đưa, viết trên MỘT dòng. Nếu chung chung
+   ("gửi lời chào"): chỉ một câu chào ngắn, KHÔNG tự thêm câu hỏi hay ý khác.
+   - Xưng hô theo các tin gần nhất ở đáy khung.
+   - KHÔNG chép nguyên tên danh bạ: tiền tố viết tắt phải hiểu ra ("A Vinh" = anh Vinh,
+     "C Lan" = chị Lan, "E Nam" = em Nam).
+   - Không rõ vai vế: viết "Xin chào", không gọi tên và không dùng "bạn".
 3. `tap` target "ô nhập tin nhắn ở đáy khung trò chuyện",
    keywords ["tin nhắn tới", "Nhập @"], anchor ["<tên X>"], relation "bottom_of",
    area "bottom". `anchor` CHỈ gồm đúng tên, không thêm chữ khác. (Ô đã có chữ, không

@@ -31,6 +31,7 @@ from config import (
     UIA_MARKS_ENABLE,
     UIA_TIMEOUT,
     UITARS_COORD,
+    UITARS_BEFORE_OCR,
     UITARS_ENABLE,
     UITARS_FULLRES,
     UITARS_MAX_SIDE,
@@ -46,12 +47,19 @@ from matching import (
     _keywords_from,
     _relative_region,
     _sim,
+    is_lossy_read,
     is_proper_name,
     name_match,
     name_rank,
     resolve_name,
+    NameResolution,
 )
 from relay_client import new_request_id
+
+# Where Zalo's chat header sits, as a fraction of the screen. A name outside it (for
+# example a row of the chat list) does not prove which conversation is open.
+ZALO_HEADER_MIN_X = 0.22
+ZALO_HEADER_MAX_Y = 0.18
 
 
 class GroundingMixin:
@@ -738,6 +746,101 @@ class GroundingMixin:
             pool.sort(key=lambda it: (it["cx"] - W / 2) ** 2 + (it["cy"] - H / 2) ** 2)
         return resolve_name(names, pool)
 
+    def _anchor_pool(self, items, relation: str) -> list:
+        """OCR boxes allowed to serve as a named anchor. In Zalo the box above the
+        message input must be the chat header, so that a stale open conversation
+        is not accepted because the name also appears in the list."""
+        if relation != "bottom_of" or "zalo" not in self._task_text.lower():
+            return items or []
+        return [it for it in items or []
+                if it["cx"] >= self._img_w * ZALO_HEADER_MIN_X
+                and it["cy"] <= self._img_h * ZALO_HEADER_MAX_Y]
+
+    def _name_crop(self, box: dict):
+        """PNG of one OCR box from the current frame, enlarged; None on failure."""
+        try:
+            from io import BytesIO
+            from PIL import Image
+            image = Image.open(BytesIO(self._raw_frame)).convert("RGB")
+            pad = 6
+            crop = image.crop((max(0, box["x0"] - pad), max(0, box["y0"] - pad),
+                               min(image.width, box["x1"] + pad),
+                               min(image.height, box["y1"] + pad)))
+            crop = crop.resize((crop.width * 4, crop.height * 4), Image.LANCZOS)
+            out = BytesIO()
+            crop.save(out, format="PNG")
+            return out.getvalue()
+        except Exception:  # noqa: BLE001 - no usable frame: the caller asks the user
+            return None
+
+    async def _read_crop(self, task_id: str, png: bytes) -> list:
+        """OCR readings of an enlarged name (empty if OCR found nothing)."""
+        readings = []
+        loop = asyncio.get_running_loop()
+        try:
+            found = await loop.run_in_executor(None, ocr.run_ocr, png, OCR_LANG)
+            if found:
+                readings.append(" ".join(item["text"] for item in found))
+                log(f"[{task_id}] đọc lại tên (OCR): {readings[0]!r}")
+        except Exception as e:  # noqa: BLE001
+            log(f"[{task_id}] đọc lại tên (OCR) lỗi: {e}")
+        return readings
+
+    async def _read_crop_vision(self, task_id: str, png: bytes) -> str:
+        """The vision model's reading. It is not told the expected name, so it
+        cannot simply agree with it."""
+        prompt = ("Ảnh là một tên hiển thị trên màn hình. Chép lại CHÍNH XÁC chữ trong ảnh, "
+                  "giữ đúng dấu tiếng Việt. Chỉ trả về chữ đó. /no_think")
+        try:
+            resp = await llm.chat(model=MODEL, think=THINK, options={"num_ctx": NUM_CTX},
+                                  messages=[{"role": "user", "content": prompt, "images": [png]}])
+            text = (resp["message"].get("content") or "").strip()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            log(f"[{task_id}] đọc lại tên (vision) lỗi: {e}")
+            return ""
+        log(f"[{task_id}] đọc lại tên (vision): {text[:40]!r}")
+        return text
+
+    async def _reread_names(self, task_id: str, names: list, res):
+        """OCR on this small frame often drops accents ('Trudng'). Before bothering
+        the user, enlarge such boxes and read them again; a certain match on the
+        re-read settles it. Anything else stays uncertain."""
+        if res.status != "uncertain" or not is_lossy_read(names, res.box["text"]):
+            return res
+        for box in [c for c in res.candidates if is_lossy_read(names, c["text"])][:4]:
+            png = self._name_crop(box)
+            if png is None:
+                continue
+            readings = await self._read_crop(task_id, png)
+            certain = lambda text: any(name_match(n, text) in CERTAIN_MATCHES for n in names)
+            if not any(certain(r) for r in readings):
+                readings.append(await self._read_crop_vision(task_id, png))
+            if any(certain(r) for r in readings):
+                log(f"[{task_id}] đọc lại xác nhận tên {names} tại '{box['text']}'")
+                return NameResolution("certain", box, res.candidates)
+        return res
+
+    def _in_search_region(self, sx: int, sy: int, region) -> bool:
+        """Is a SCREEN point inside a search region given in image pixels?"""
+        if region is None or not (self._img_w and self._scr_w):
+            return True
+        return _in_region({"cx": sx * self._img_w / self._scr_w,
+                           "cy": sy * self._img_h / self._scr_h}, region)
+
+    async def _tap_with_tars(self, task_id: str, target: str, area: str, anchor_kws: list,
+                             region, unverified: str):
+        """Click where UI-TARS points. None if it has no answer or points outside
+        the region of a verified anchor, so the next layer takes over."""
+        point = await self._tars_ground(task_id, target, area, anchor_kws)
+        if not point:
+            return None
+        if not self._in_search_region(point[0], point[1], region):
+            log(f"[{task_id}] tars ({point[0]},{point[1]}) ngoài vùng của mốc -> bỏ")
+            return None
+        return await self._finish_tap(task_id, target, point[0], point[1], "ui-tars", unverified)
+
     def _pick_name_anchor(self, res, names: list, kws: list, relation: str, items: list) -> dict:
         """A name can show in several places (feed post, chat list, chat header).
         Among the equally good matches take the one whose relative region holds
@@ -806,7 +909,8 @@ class GroundingMixin:
         if (names or anchor_names) and OCR_ENABLE:
             items = await self._ocr_items(task_id)
         if names:
-            res = self._resolve_on_screen(names, items, area)
+            res = await self._reread_names(
+                task_id, names, self._resolve_on_screen(names, items, area))
             log(f"[{task_id}] tên {names}: {res.status}"
                 + (f" -> '{res.box['text']}'" if res.box else ""))
             if res.box:
@@ -820,7 +924,8 @@ class GroundingMixin:
         if anchor_names:
             # `area` describes the target; the anchor is usually elsewhere (a chat
             # header sits at the top while the input is at the bottom).
-            res = self._resolve_on_screen(anchor_names, items, "any", relation)
+            res = await self._reread_names(task_id, anchor_names, self._resolve_on_screen(
+                anchor_names, self._anchor_pool(items, relation), "any", relation))
             log(f"[{task_id}] tên mốc {anchor_names}: {res.status}"
                 + (f" -> '{res.box['text']}'" if res.box else ""))
             if res.box:
@@ -841,10 +946,7 @@ class GroundingMixin:
             uia = await self._uia_find(task_id, kws, area, control)
             if uia:
                 sx, sy, uia_name = uia
-                inside = region is None or not (self._img_w and self._scr_w) or _in_region(
-                    {"cx": sx * self._img_w / self._scr_w, "cy": sy * self._img_h / self._scr_h},
-                    region)
-                if inside:
+                if self._in_search_region(sx, sy, region):
                     guard = unverified
                     if names and any(name_match(n, uia_name) in CERTAIN_MATCHES for n in names):
                         guard = ""
@@ -883,20 +985,23 @@ class GroundingMixin:
             else:   # anchor not read by OCR: still tell the model where to look
                 ctx = f"(phần tử nằm {rel_vi} chữ '{anchor_kws[0]}')"
 
-        # Hybrid grounding: a VERY confident OCR keyword match wins BEFORE UI-TARS.
-        # A text-labelled target ("Aa", "Gửi") is read more precisely by OCR than a
-        # VLM points at it; UI-TARS then covers the text-less / icon targets.
+        # (B) UI-TARS grounding, by default ahead of the OCR keyword match.
+        if pt is None and UITARS_BEFORE_OCR:
+            tapped = await self._tap_with_tars(task_id, target, area, anchor_kws, region, unverified)
+            if tapped:
+                return tapped
+
+        # A VERY confident OCR keyword match on a text-labelled target ("Aa", "Gửi").
         if pt is None and items:
             ex = await self._tap_ocr(task_id, target, kws, area, items, region,
                                      thr=OCR_EXACT_MIN)
             if ex:
                 pt, how = ex, "OCR-exact"
 
-        # (B) UI-TARS grounding: returns real screen coords. None -> vision.
-        if pt is None:
-            tg = await self._tars_ground(task_id, target, area, anchor_kws)
-            if tg:
-                return await self._finish_tap(task_id, target, tg[0], tg[1], "ui-tars", unverified)
+        if pt is None and not UITARS_BEFORE_OCR:
+            tapped = await self._tap_with_tars(task_id, target, area, anchor_kws, region, unverified)
+            if tapped:
+                return tapped
 
         # UIA Set-of-Mark: let the LLM pick among numbered interactive controls.
         if pt is None:

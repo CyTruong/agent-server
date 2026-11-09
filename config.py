@@ -76,6 +76,9 @@ UITARS_FULLRES = os.environ.get("UITARS_FULLRES", "false").lower() in ("1", "tru
 # 'norm1000' = 0..1000 normalised, 'auto' = guess (>1000 -> image, else norm1000).
 # Calibrate once from the 'tars raw=... -> screen' log, then pin it explicitly.
 UITARS_COORD = os.environ.get("UITARS_COORD", "auto").lower()
+# Ask UI-TARS before the OCR keyword match. Checking people's names by OCR still
+# comes first: UI-TARS returns only a point and cannot tell two names apart.
+UITARS_BEFORE_OCR = os.environ.get("UITARS_BEFORE_OCR", "true").lower() in ("1", "true", "yes")
 # Plan-and-execute: for a multi-step request, make one text-only LLM call first to
 # decompose it into a numbered step list, then keep that list in context as a
 # checklist. Cheap (~1 call), no extra VRAM. Simple tasks skip it (see _needs_plan).
@@ -92,8 +95,8 @@ OCR_PARALLEL_MIN_SPLITS = int(os.environ.get("OCR_PARALLEL_MIN_SPLITS", "2"))
 # Keyword-vs-OCR-text similarity (0..1) at/above which a box counts as a match
 # and is clicked directly, without asking the LLM.
 OCR_MATCH_MIN = float(os.environ.get("OCR_MATCH_MIN", "0.8"))
-# Hybrid grounding: a VERY confident OCR keyword match (>= this) is clicked BEFORE
-# UI-TARS. A text-labelled target ("Aa", "Gửi") is read more precisely by OCR than
+# A VERY confident OCR keyword match (>= this) is clicked directly (before UI-TARS
+# when UITARS_BEFORE_OCR=false). A text-labelled target ("Aa", "Gửi") is read more precisely by OCR than
 # a VLM points at it, so OCR wins first; UI-TARS handles the text-less/icon cases.
 OCR_EXACT_MIN = float(os.environ.get("OCR_EXACT_MIN", "0.9"))
 
@@ -113,8 +116,8 @@ CACHE_DB = os.environ.get(
 )
 CACHE_THRESHOLD = float(os.environ.get("TASK_CACHE_THRESHOLD", "0.82"))
 CACHE_MAX_AGE_DAYS = int(os.environ.get("TASK_CACHE_MAX_AGE_DAYS", "30"))
-SCREEN_CACHE_TTL = float(os.environ.get("SCREEN_CACHE_TTL_SECONDS", "2.0"))
-OCR_CACHE_TTL = float(os.environ.get("OCR_CACHE_TTL_SECONDS", "2.0"))
+SCREEN_CACHE_TTL = float(os.environ.get("SCREEN_CACHE_TTL_SECONDS", "6.0"))
+OCR_CACHE_TTL = float(os.environ.get("OCR_CACHE_TTL_SECONDS", "6.0"))
 SCREEN_MUTATING_TOOLS = frozenset({
     "move",
     "click",

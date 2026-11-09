@@ -36,7 +36,7 @@ from imaging import annotate_grid, prune_images
 from intents import _is_ask_or_blocked, _needs_delivery, _needs_plan, parse_yes_no
 from relay_client import RelayClient, new_request_id
 from skill_select import build_system_prompt
-from task_cache import TaskCache
+from task_cache import TaskCache, is_verified_workflow
 from tools import TOOLS, TOOL_NAMES, is_dangerous, split_for_type
 
 
@@ -150,18 +150,8 @@ class TaskRunner(GroundingMixin):
                                   "step": step, "max_steps": MAX_STEPS, "message": message})
 
     def _record_verified_cache(self, text: str, skill_names: list[str]) -> None:
-        """Persist only workflows that included a successful screenshot."""
-        if not self._executed_steps:
-            return
-        has_screenshot = any(
-            step["tool"] == "screenshot"
-            and not step["result"].startswith("error")
-            for step in self._executed_steps
-        )
-        has_error = any(
-            step["result"].startswith("error") for step in self._executed_steps
-        )
-        if not has_screenshot or has_error:
+        """Persist only workflows whose final state was seen on a screenshot."""
+        if not is_verified_workflow(self._executed_steps):
             return
         try:
             self.task_cache.record_verified(text, skill_names, self._executed_steps)
@@ -209,6 +199,7 @@ class TaskRunner(GroundingMixin):
         empties = 0        # consecutive fully-empty LLM replies
         delivered = False  # has the agent actually typed/sent anything yet?
         deliver_nudges = 0 # times we pushed it to finish the "send" part
+        send_checked = False  # already forced a screenshot after the send?
         needs_deliver = _needs_delivery(text) and await self._requires_delivery(task_id, text)
 
         # Plan-and-execute: decompose a multi-step request first, keep it as a
@@ -290,6 +281,15 @@ class TaskRunner(GroundingMixin):
                             "thì DỪNG và hỏi lại, không gửi đại." + NT})
                         continue
                     result = content or f"(suy nghĩ) {think}"
+                    # Sent but never looked: check the screen before reporting. Not
+                    # gated on _is_ask_or_blocked: a success report that quotes the
+                    # message can contain "?".
+                    if (needs_deliver and delivered and not send_checked
+                            and self._executed_steps[-1]["tool"] != "screenshot"):
+                        send_checked = True
+                        if await self._attach_send_proof(task_id, messages):
+                            continue
+                        result += " (chưa xác minh được trên màn hình)"
                     log(f"[{task_id}] DONE: {result[:160]}")
                     self._record_verified_cache(text, skill_names)
                     await self.relay.send_ui({"type": "done", "task_id": task_id,
@@ -406,6 +406,20 @@ class TaskRunner(GroundingMixin):
                 self._invalidate_screen_cache()
             return f"ok {detail}".strip()
         return f"error: {res.get('error', 'thất bại')}"
+
+    async def _attach_send_proof(self, task_id: str, messages: list) -> bool:
+        """Screenshot the result of a send and make the model judge from it."""
+        log(f"[{task_id}] chưa xác minh sau khi gửi -> tự chụp màn hình")
+        result = await self._screenshot(task_id, force=True, attach=True)
+        if self._pending_image is None:
+            log(f"[{task_id}] không chụp được để xác minh: {result[:120]}")
+            return False
+        self._executed_steps.append({"tool": "screenshot", "arguments": {}, "result": result})
+        messages.append({"role": "user", "images": [self._pending_image], "content":
+            "Đây là màn hình SAU khi gửi. Chỉ báo thành công nếu THẤY nội dung vừa gửi đã "
+            "xuất hiện. Không thấy thì nói rõ là chưa xác minh được. KHÔNG gửi lại." + NT})
+        self._pending_image = None
+        return True
 
     async def _type_text(self, task_id: str, text: str) -> str:
         """Type text of any length as sequential chunks. Stops at the first

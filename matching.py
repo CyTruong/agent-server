@@ -151,13 +151,13 @@ def name_match(name: str, text: str) -> str:
     n, t = _words(name), _words(text)
     if not n or not t:
         return NONE
-    if n == t:
+    if n == t or "".join(n) == "".join(t):   # OCR often drops a space: "AVinh"
         return EXACT
     i = _seq_at(n, t)
     if i >= 0:
         return SUFFIX if i + len(n) == len(t) and _looks_like_name(text) else PARTIAL
     bare_n, bare_t = [_norm(w) for w in n], [_norm(w) for w in t]
-    if _seq_at(bare_n, bare_t) >= 0:
+    if _seq_at(bare_n, bare_t) >= 0 or "".join(bare_n) == "".join(bare_t):
         return ACCENT
     joined = " ".join(bare_n)
     ratio = max([SequenceMatcher(None, joined, " ".join(bare_t)).ratio()]
@@ -177,6 +177,12 @@ class NameResolution:
 def name_rank(names: list, text: str) -> int:
     """Quality of the best match of any of `names` in `text`; higher is better."""
     return max((_RANK[name_match(n, text)] for n in names), default=0)
+
+
+def is_lossy_read(names: list, text: str) -> bool:
+    """Could `text` be the name with its accents or letters misread by OCR? Other
+    mismatches ('Trường Đại học') are different text, so re-reading cannot help."""
+    return 0 < name_rank(names, text) <= _RANK[ACCENT]
 
 
 def resolve_name(names: list, items: list) -> NameResolution:

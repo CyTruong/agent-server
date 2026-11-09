@@ -17,6 +17,8 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
+from config import SCREEN_MUTATING_TOOLS
+
 
 def normalize_text(value: str) -> str:
     """Normalize Vietnamese/user text for stable cache lookup."""
@@ -25,6 +27,18 @@ def normalize_text(value: str) -> str:
     text = text.replace("đ", "d").replace("Đ", "D").lower()
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+def is_verified_workflow(steps: list[dict[str, Any]]) -> bool:
+    """No step failed, and a screenshot came AFTER the last action that changed
+    the screen. A screenshot taken before sending proves nothing about the send."""
+    if any(step["result"].startswith("error") for step in steps):
+        return False
+    last_action = max(
+        (i for i, step in enumerate(steps) if step["tool"] in SCREEN_MUTATING_TOOLS),
+        default=-1,
+    )
+    return any(step["tool"] == "screenshot" for step in steps[last_action + 1:])
 
 
 # A tap's target/keywords/anchor hold names of people. A hint carrying them can
@@ -118,7 +132,11 @@ class TaskCache:
 
             best_row = None
             best_score = 0.0
+            unverified_ids = []
             for row in rows:
+                if not is_verified_workflow(json.loads(row["workflow"])):
+                    unverified_ids.append((row["id"],))   # saved under the old rule
+                    continue
                 text_score = SequenceMatcher(
                     None, normalized, row["intent"]
                 ).ratio()
@@ -127,6 +145,8 @@ class TaskCache:
                 if score > best_score:
                     best_score = score
                     best_row = row
+
+            connection.executemany("DELETE FROM task_workflows WHERE id = ?", unverified_ids)
 
             if best_row is None or best_score < self.threshold:
                 return None
