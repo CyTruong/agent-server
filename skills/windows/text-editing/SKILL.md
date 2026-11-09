@@ -8,5 +8,5 @@
 
 ## Quy tắc
 - Gõ đúng nội dung người dùng yêu cầu, không tự thêm bớt.
-- Trong ô chat, `enter` thường là GỬI — chỉ nhấn sau khi được xác nhận.
+- Trong ô chat, `enter` thường là GỬI — chỉ nhấn khi đúng người nhận và đủ nội dung.
 - Không tự gõ mật khẩu/OTP/số thẻ.

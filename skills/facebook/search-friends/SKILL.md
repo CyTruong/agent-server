@@ -15,4 +15,4 @@
 ## Lưu ý
 - Nhắn tin từ trang cá nhân: `tap` keywords ["Nhắn tin"], anchor [tên người],
   relation "below" — khung chat sẽ mở ở góc phải dưới.
-- Gửi lời mời kết bạn ("Thêm bạn bè") chỉ khi người dùng yêu cầu rõ, và xin xác nhận.
+- Gửi lời mời kết bạn ("Thêm bạn bè") chỉ khi người dùng yêu cầu rõ.

@@ -19,6 +19,10 @@ from typing import Awaitable, Callable, Optional
 import websockets
 
 
+def new_request_id() -> str:
+    return uuid.uuid4().hex[:16]
+
+
 class RelayClient:
     def __init__(self, url: str, token: str, ca_file: str):
         self._url = url
@@ -26,7 +30,7 @@ class RelayClient:
         self._ctx = ssl.create_default_context(cafile=ca_file)
         self._ws = None
         self._pending: dict[str, asyncio.Future] = {}
-        self._frame_waiters: list[asyncio.Future] = []
+        self._frame_waiters: list[tuple[str, asyncio.Future]] = []   # (request_id, future)
         self.latest_frame: Optional[bytes] = None
         self.frame_sw = 0   # real screen width reported with the last frame
         self.frame_sh = 0
@@ -81,6 +85,11 @@ class RelayClient:
         elif mtype == "confirm" and self.on_confirm:
             await self.on_confirm(msg)
         elif mtype == "frame":
+            # Firmware that tags frames lets us drop a late one from an older
+            # request; an untagged frame goes to whoever is waiting.
+            rid = msg.get("request_id") or ""
+            if rid and not any(r == rid for r, _ in self._frame_waiters):
+                return
             img = None
             b64 = msg.get("image")
             if b64:
@@ -91,7 +100,7 @@ class RelayClient:
             self.latest_frame = img
             self.frame_sw = int(msg.get("sw") or 0)
             self.frame_sh = int(msg.get("sh") or 0)
-            for fut in self._frame_waiters:
+            for _, fut in self._frame_waiters:
                 if not fut.done():
                     fut.set_result(img)
             self._frame_waiters.clear()
@@ -101,17 +110,22 @@ class RelayClient:
             if not fut.done():
                 fut.set_exception(RuntimeError(reason))
         self._pending.clear()
-        for fut in self._frame_waiters:
+        self._release_frame_waiters()
+
+    def _release_frame_waiters(self):
+        for _, fut in self._frame_waiters:
             if not fut.done():
                 fut.set_result(None)
         self._frame_waiters.clear()
 
-    def arm_frame(self) -> asyncio.Future:
+    def arm_frame(self, request_id: str = "") -> asyncio.Future:
         """Register interest in the NEXT screenshot frame. Call before sending
         the screenshot device_call, then await the returned future (with your
-        own timeout). Resolves to JPEG bytes, or None on failure/disconnect."""
+        own timeout). Resolves to JPEG bytes, or None on failure/disconnect. Only
+        the newest request wants a frame, so earlier waiters are released."""
+        self._release_frame_waiters()
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
-        self._frame_waiters.append(fut)
+        self._frame_waiters.append((request_id, fut))
         return fut
 
     async def _send(self, msg: dict):
@@ -123,24 +137,23 @@ class RelayClient:
         """Progress/assistant/done/error/confirm_request toward the browser."""
         try:
             await self._send(msg)
-        except RuntimeError:
-            pass  # UI updates are best-effort
+        except Exception:  # noqa: BLE001 - UI updates are best-effort; the socket
+            pass           # can also close mid-send (websockets.ConnectionClosed)
 
     async def call_device(self, tool: str, arguments: dict, task_id: str,
-                          timeout: float = 10.0) -> dict:
+                          timeout: float = 10.0, request_id: str = "") -> dict:
         """Send a device_call and await its device_result. Raises on timeout."""
-        request_id = uuid.uuid4().hex[:16]
+        request_id = request_id or new_request_id()
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._pending[request_id] = fut
-        await self._send({
-            "type": "device_call",
-            "task_id": task_id,
-            "request_id": request_id,
-            "tool": tool,
-            "arguments": arguments,
-        })
         try:
+            await self._send({
+                "type": "device_call",
+                "task_id": task_id,
+                "request_id": request_id,
+                "tool": tool,
+                "arguments": arguments,
+            })
             return await asyncio.wait_for(fut, timeout)
-        except asyncio.TimeoutError:
+        finally:
             self._pending.pop(request_id, None)
-            raise

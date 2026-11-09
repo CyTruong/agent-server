@@ -39,4 +39,5 @@ Dùng khi yêu cầu KHÔNG nói rõ ứng dụng/nền tảng (vd "gửi tin nh
   hình đang mở app mà yêu cầu không nhắc tên (vd đang mở Zalo nhưng không nói "zalo"):
   vẫn thao tác được dựa trên những gì NHÌN THẤY; nếu cần chính xác hơn, nhờ người dùng
   nêu rõ tên nền tảng để nạp đúng bộ hướng dẫn.
-- Không tự mở app mới hay đổi tài khoản vì phỏng đoán — chỉ dùng cái đang mở, hoặc hỏi lại.
+- Không tự mở app mới hay đổi tài khoản vì phỏng đoán. Yêu cầu nêu đích danh app (vd
+  "zalo") mà app chưa mở thì được mở app đó.

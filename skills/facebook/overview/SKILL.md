@@ -31,5 +31,5 @@ Mục **"Người liên hệ"**: danh sách tên bạn bè đang hoạt động;
 - Chỉ thao tác trên tài khoản của người dùng, theo đúng yêu cầu; không tương tác hàng
   loạt (nhắn/bình luận/thích liên tục cho nhiều người), không mạo danh. Yêu cầu có
   dấu hiệu spam hay lừa đảo thì từ chối.
-- Gửi tin, đăng bài, bình luận, thả cảm xúc là hành động công khai, khó thu hồi:
-  soạn xong thì xin xác nhận trước khi bấm nút cuối.
+- Gửi tin, đăng bài, bình luận, thả cảm xúc khó thu hồi: phải chắc đúng người/đúng bài
+  rồi mới bấm nút cuối; đã chắc thì làm luôn, không hỏi lại.

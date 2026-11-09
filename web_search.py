@@ -13,7 +13,14 @@ model can tell the user it couldn't search, rather than crashing the task.
 """
 from __future__ import annotations
 
+import ipaddress
 import os
+import socket
+import urllib.error
+import urllib.parse
+import urllib.request
+
+import config  # noqa: F401 - loads .env before the settings below are read
 
 SEARCH_BACKEND = os.environ.get("SEARCH_BACKEND", "ddgs").lower()
 SEARCH_REGION = os.environ.get("SEARCH_REGION", "vn-vi")   # DuckDuckGo region
@@ -54,16 +61,49 @@ def _html_to_text(html: str) -> str:
     return " ".join(text.split())
 
 
+def _blocked_reason(url: str) -> str:
+    """Why this URL must not be fetched, or "" if it is public. The model picks
+    these URLs, and pages it read can steer it, so keep it off this server's
+    localhost/LAN. Every address the host resolves to must be public (a DNS
+    change between this check and the connect is not covered)."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+        return "url không hợp lệ"
+    try:
+        infos = socket.getaddrinfo(parts.hostname, parts.port or 443, type=socket.SOCK_STREAM)
+    except (OSError, UnicodeError, ValueError) as e:
+        return f"không phân giải được tên miền ({e})"
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0].split("%")[0])
+        ip = getattr(ip, "ipv4_mapped", None) or ip
+        if not ip.is_global:
+            return f"địa chỉ nội bộ bị chặn ({ip})"
+    return ""
+
+
+class _CheckedRedirect(urllib.request.HTTPRedirectHandler):
+    """Apply the same check to every redirect hop."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        reason = _blocked_reason(newurl)
+        if reason:
+            raise urllib.error.URLError(f"redirect bị chặn: {reason}")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_opener = urllib.request.build_opener(_CheckedRedirect)
+
+
 def fetch_page(url: str, max_chars: int = SEARCH_FETCH_CHARS) -> str:
     """Download a URL and return readable text (truncated). Server-side, text
     only, size/time capped. Returns 'error: ...' on failure."""
     url = (url or "").strip()
-    if not url.lower().startswith(("http://", "https://")):
-        return "error: url không hợp lệ"
-    import urllib.request
+    reason = _blocked_reason(url)
+    if reason:
+        return f"error: {reason}"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": _UA})
-        with urllib.request.urlopen(req, timeout=SEARCH_TIMEOUT) as resp:
+        with _opener.open(req, timeout=SEARCH_TIMEOUT) as resp:
             ctype = resp.headers.get("Content-Type", "")
             if "html" not in ctype and "text" not in ctype:
                 return f"error: không phải trang văn bản ({ctype})"
@@ -118,7 +158,6 @@ def _search_ddgs(query: str, k: int) -> list[dict]:
 
 def _search_tavily(query: str, k: int) -> list[dict]:
     import json
-    import urllib.request
     if not TAVILY_API_KEY:
         raise RuntimeError("thiếu TAVILY_API_KEY")
     payload = json.dumps({

@@ -8,7 +8,7 @@
    (Công khai / Bạn bè...) dưới tên người dùng.
 4. `type` nội dung đúng như người dùng đưa (hoặc bản nháp đã được họ duyệt).
 5. `screenshot` rà lại nội dung và **đối tượng xem**; báo lại cho người dùng.
-6. **Xin xác nhận** trước khi đăng. Được đồng ý: `tap` keywords ["Đăng"],
+6. Đăng luôn: `tap` keywords ["Đăng"],
    anchor ["Tạo bài viết"], relation "bottom_of".
 7. `screenshot` xác minh bài đã xuất hiện đầu bảng tin.
 

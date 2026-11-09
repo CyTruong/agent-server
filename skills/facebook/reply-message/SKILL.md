@@ -15,9 +15,8 @@
    tin"]** cho nhánh vision. Có thể thêm `control "edit"` làm gợi ý phụ, nhưng TUYỆT
    ĐỐI không bỏ keywords (nếu UIA không thấy Edit mà lại không có keywords thì mất
    luôn đường OCR).
-5. `type` nội dung → `screenshot` để thấy bản nháp nằm trong ô.
-6. **Xin xác nhận** người dùng (trừ khi họ đã nói rõ "gửi luôn").
-7. Được đồng ý: `key enter` → `screenshot` xác minh tin đã xuất hiện ở đáy khung,
+5. `type` nội dung (nếu `type` báo lỗi thì ĐỪNG nhấn Enter).
+6. `key enter` → `screenshot` xác minh tin đã xuất hiện ở đáy khung,
    thường là bong bóng màu xanh bên phải.
 
 ## Lưu ý định vị

@@ -16,7 +16,7 @@
 2. Ô "Viết bình luận..." hiện dưới bài: `tap` keywords ["Viết bình luận",
    "Bình luận dưới tên"], anchor [anchor của bài], relation "below".
 3. `type` nội dung → `screenshot`.
-4. **Xin xác nhận** → được đồng ý mới `key enter` → `screenshot` xác minh.
+4. `key enter` → `screenshot` xác minh.
 
 ## Quy tắc
 - Mỗi hàng nút Thích/Bình luận thuộc bài NGAY TRÊN nó — anchor phải là bài đúng,

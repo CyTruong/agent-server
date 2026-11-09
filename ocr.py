@@ -14,10 +14,13 @@ backend loads, run_ocr returns None and the caller falls back to the grid locate
 The engine is loaded once and reused.
 """
 import os
+import threading
 
 _engine = None
 _kind = None
 _tried = False
+# The engines are not thread-safe; a cancelled task's OCR can still be running.
+_lock = threading.Lock()
 
 
 def _load(lang: str):
@@ -64,6 +67,11 @@ def _item(box, text, conf):
 
 def run_ocr(image_bytes: bytes, lang: str = "vi"):
     """Return a list of {text, conf, x0,y0,x1,y1, cx,cy} or None on failure."""
+    with _lock:
+        return _run_ocr(image_bytes, lang)
+
+
+def _run_ocr(image_bytes: bytes, lang: str):
     kind, eng = _load(lang)
     if eng is None:
         return None

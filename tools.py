@@ -5,10 +5,12 @@ identical allowlist and re-validates every argument, so a wrong tool choice by
 the model is rejected device-side too - the schema here is convenience, not the
 security boundary.
 
-`DANGEROUS` lists calls that must be confirmed by the user before running
+`is_dangerous` picks the calls the user must confirm before they run
 (ai_link also refuses nothing here - confirmation is enforced by the agent, so
 keep this list and the firmware's intent in sync).
 """
+import re
+import unicodedata
 from typing import Any
 
 # Ollama / OpenAI-style tool definitions.
@@ -52,7 +54,8 @@ TOOLS: list[dict[str, Any]] = [
                            "Messenger', 'nút Gửi', 'liên hệ Trường'). Hệ thống tìm chữ trên "
                            "màn hình (OCR) theo keywords để định vị chính xác. ƯU TIÊN dùng "
                            "tap thay cho click toạ độ khi cần bấm vào phần tử trên màn hình. "
-                           "LUÔN điền keywords là các chữ NHÌN THẤY trên/ngay cạnh phần tử."),
+                           "Điền keywords là các chữ NHÌN THẤY trên/ngay cạnh phần tử; phần "
+                           "tử không có chữ thì để trống và mô tả rõ trong target."),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -97,7 +100,7 @@ TOOLS: list[dict[str, Any]] = [
                                         "Mặc định any (tìm theo keywords)."),
                     },
                 },
-                "required": ["target", "keywords"],
+                "required": ["target"],
             },
         },
     },
@@ -117,7 +120,8 @@ TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "type",
-            "description": "Type a short text string (Unicode) at the current focus.",
+            "description": ("Type a text string (Unicode) at the current focus. Any "
+                           "length on a single line; long text is split automatically."),
             "parameters": {
                 "type": "object",
                 "properties": {"text": {"type": "string"}},
@@ -202,27 +206,90 @@ TOOLS: list[dict[str, Any]] = [
 
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 
-# Confirm with the user before executing. win can open the Run dialog; typing
-# newlines or shell words can execute commands.
-DANGEROUS = {"key:win"}
+# Allowlists: anything not listed here needs the user's confirmation. New
+# shortcuts are therefore safe by default until someone adds them.
+SAFE_KEYS = frozenset({
+    "enter", "tab", "esc", "escape", "backspace", "delete", "del", "space",
+    "up", "down", "left", "right", "home", "end",
+})
+SAFE_HOTKEYS = frozenset({
+    "ctrl+a", "ctrl+c", "ctrl+v", "ctrl+x", "ctrl+z", "ctrl+y", "ctrl+s", "ctrl+f",
+    "ctrl+t", "ctrl+w", "ctrl+l", "ctrl+r", "ctrl+n", "ctrl+tab", "ctrl+shift+tab",
+    "ctrl+shift+t", "ctrl+enter", "ctrl+home", "ctrl+end", "shift+enter", "shift+tab",
+    "alt+tab", "alt+left", "alt+right", "f5",
+    # Microsoft Word: open/save-as dialogs, replace, formatting, heading styles.
+    "ctrl+f12", "f12", "ctrl+h", "ctrl+b", "ctrl+i", "ctrl+u",
+    "ctrl+alt+1", "ctrl+alt+2", "ctrl+alt+3",
+})
+
+# Free text cannot be allowlisted (it is what gets sent to people), so `type` is
+# checked for what would run as a command once Enter is pressed.
+_RISKY_FIRST_WORDS = frozenset({
+    "cmd", "powershell", "pwsh", "wscript", "cscript", "mshta", "rundll32",
+    "regsvr32", "certutil", "bitsadmin", "curl", "wget", "schtasks", "taskkill",
+    "shutdown", "del", "rd", "rmdir", "rm", "format", "reg", "msiexec", "iex",
+    "iwr", "invoke-expression", "invoke-webrequest",
+})
+_RISKY_TEXT = re.compile(
+    r"powershell|\bcmd(\.exe|\s+/[ck]\b)|\s-enc(odedcommand)?\b|invoke-(expression|webrequest)"
+    r"|\biex\b|&&|https?://\S+\.(ps1|bat|cmd|exe|vbs|hta)\b",
+    re.IGNORECASE,
+)
+
+
+# The firmware's command line holds 95 bytes including "type ", and truncates
+# silently beyond that.
+TYPE_MAX_BYTES = 90
+_JOINERS = {"\u200d", "\ufe0f"}
+
+
+def _can_split_before(text: str, i: int) -> bool:
+    """The PC agent trims each command, so a space at a chunk edge would be lost;
+    a combining mark or emoji joiner must stay with the character before it."""
+    before, after = text[i - 1], text[i]
+    return not (before.isspace() or after.isspace() or unicodedata.combining(after)
+                or before in _JOINERS or after in _JOINERS)
+
+
+def split_for_type(text: str, max_bytes: int = TYPE_MAX_BYTES) -> list[str]:
+    """Cut text into chunks of at most max_bytes UTF-8 bytes that, pasted one after
+    another, reproduce it exactly. Raises ValueError if no safe cut exists."""
+    text = unicodedata.normalize("NFC", text)
+    chunks, start, used, last_ok = [], 0, 0, 0
+    i = 0
+    while i < len(text):
+        size = len(text[i].encode("utf-8"))
+        if i > start and _can_split_before(text, i):
+            last_ok = i
+        if used + size > max_bytes:
+            if last_ok <= start:
+                raise ValueError("không có điểm cắt an toàn")
+            chunks.append(text[start:last_ok])
+            start, used, i = last_ok, 0, last_ok
+            continue
+        used += size
+        i += 1
+    chunks.append(text[start:])
+    return chunks
+
+
+def _first_command_word(text: str) -> str:
+    """'"C:\\Windows\\cmd.exe" /c x' -> 'cmd'."""
+    parts = text.strip().strip("\"'").split()
+    if not parts:
+        return ""
+    word = re.split(r"[\\/]", parts[0].strip("\"'").lower())[-1]
+    return word[:-4] if word.endswith(".exe") else word
 
 
 def is_dangerous(tool: str, args: dict) -> bool:
-    if tool == "key" and args.get("name", "").lower() == "win":
-        return True
+    if tool == "key":
+        return str(args.get("name", "")).lower() not in SAFE_KEYS
     if tool == "hotkey":
-        combo = args.get("combo", "").lower().replace(" ", "")
-        # Run dialog, force-close, task manager, logoff/shutdown-ish combos.
-        if combo in ("win+r", "alt+f4", "ctrl+alt+del", "ctrl+alt+delete",
-                     "win+x", "ctrl+shift+esc"):
-            return True
-        if "win" in combo.split("+"):
-            return True
+        return str(args.get("combo", "")).lower().replace(" ", "") not in SAFE_HOTKEYS
     if tool == "type":
-        text = args.get("text", "")
-        if "\n" in text or "\r" in text:
-            return True
-        low = text.strip().lower()
-        if low in ("cmd", "powershell", "pwsh") or low.startswith(("del ", "format ", "rm ")):
-            return True
+        text = str(args.get("text", ""))
+        return ("\n" in text or "\r" in text
+                or _first_command_word(text) in _RISKY_FIRST_WORDS
+                or bool(_RISKY_TEXT.search(text)))
     return False

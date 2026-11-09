@@ -27,9 +27,20 @@ def normalize_text(value: str) -> str:
     return text
 
 
+# A tap's target/keywords/anchor hold names of people. A hint carrying them can
+# steer a request for "Tường" to a workflow recorded for "Trường".
+_NAME_FREE_TAP_ARGS = ("area", "relation", "control")
+
+
+def _name_free(name: str, args: dict[str, Any]) -> dict[str, Any]:
+    if name != "tap":
+        return args
+    return {key: args[key] for key in _NAME_FREE_TAP_ARGS if key in args}
+
+
 def _safe_step(name: str, args: dict[str, Any], result: str) -> dict[str, Any]:
     """Keep replay hints useful without persisting typed secrets/messages."""
-    saved_args = dict(args)
+    saved_args = dict(_name_free(name, args))
     if name == "type":
         saved_args["text"] = "{{text_from_current_request}}"
     elif "text" in saved_args and isinstance(saved_args["text"], str):
@@ -178,11 +189,13 @@ class TaskCache:
         for index, step in enumerate(match["workflow"], start=1):
             steps.append(
                 f"{index}. {step['tool']} "
-                f"{json.dumps(step['arguments'], ensure_ascii=False)}"
+                # Filtered here too: rows saved by older versions still have names.
+                f"{json.dumps(_name_free(step['tool'], step['arguments']), ensure_ascii=False)}"
             )
         return (
             "Có một workflow cũ tương tự trong cache (độ tương đồng "
             f"{match['score']}). Đây chỉ là gợi ý tham khảo, KHÔNG được replay "
-            "mù; hãy kiểm tra screenshot/context và xác minh từng bước.\n"
+            "mù; hãy kiểm tra screenshot/context và xác minh từng bước. Tên "
+            "người và nội dung phải lấy từ yêu cầu HIỆN TẠI.\n"
             + "\n".join(steps)
         )
