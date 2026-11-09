@@ -1,0 +1,188 @@
+"""Small, local retrieval cache for verified desktop workflows.
+
+The cache is deliberately advisory: it returns a workflow hint for the LLM and
+never executes cached actions by itself. SQLite is used so the agent has no new
+runtime dependency and remains usable as a single-user Linux process.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import sqlite3
+import time
+import unicodedata
+from difflib import SequenceMatcher
+from pathlib import Path
+from typing import Any
+
+
+def normalize_text(value: str) -> str:
+    """Normalize Vietnamese/user text for stable cache lookup."""
+    text = unicodedata.normalize("NFKD", value or "")
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    text = text.replace("đ", "d").replace("Đ", "D").lower()
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _safe_step(name: str, args: dict[str, Any], result: str) -> dict[str, Any]:
+    """Keep replay hints useful without persisting typed secrets/messages."""
+    saved_args = dict(args)
+    if name == "type":
+        saved_args["text"] = "{{text_from_current_request}}"
+    elif "text" in saved_args and isinstance(saved_args["text"], str):
+        saved_args["text"] = "{{runtime_text}}"
+    return {
+        "tool": name,
+        "arguments": saved_args,
+        "result": (result or "")[:240],
+    }
+
+
+class TaskCache:
+    """SQLite-backed retrieval cache for verified task workflows."""
+
+    def __init__(
+        self,
+        path: str | os.PathLike[str] = "agent_cache.sqlite3",
+        *,
+        enabled: bool = True,
+        threshold: float = 0.82,
+        max_age_days: int = 30,
+    ) -> None:
+        self.enabled = enabled
+        self.threshold = threshold
+        self.max_age_seconds = max_age_days * 24 * 60 * 60
+        self.path = Path(path)
+        self._initialize()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def _initialize(self) -> None:
+        if not self.enabled:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self._connect() as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS task_workflows (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    intent TEXT NOT NULL,
+                    skills TEXT NOT NULL,
+                    workflow TEXT NOT NULL,
+                    verified INTEGER NOT NULL DEFAULT 0,
+                    usage_count INTEGER NOT NULL DEFAULT 0,
+                    created_at REAL NOT NULL,
+                    last_used_at REAL NOT NULL,
+                    UNIQUE(intent, skills)
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_task_workflows_verified "
+                "ON task_workflows(verified, last_used_at)"
+            )
+
+    def retrieve(self, intent: str, skills: list[str]) -> dict[str, Any] | None:
+        """Return the best recent verified workflow, or ``None``."""
+        if not self.enabled:
+            return None
+        normalized = normalize_text(intent)
+        if not normalized:
+            return None
+        cutoff = time.time() - self.max_age_seconds
+        skill_key = ",".join(sorted(skills))
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM task_workflows "
+                "WHERE verified = 1 AND last_used_at >= ?",
+                (cutoff,),
+            ).fetchall()
+
+            best_row = None
+            best_score = 0.0
+            for row in rows:
+                text_score = SequenceMatcher(
+                    None, normalized, row["intent"]
+                ).ratio()
+                skill_score = 1.0 if row["skills"] == skill_key else 0.0
+                score = text_score * 0.85 + skill_score * 0.15
+                if score > best_score:
+                    best_score = score
+                    best_row = row
+
+            if best_row is None or best_score < self.threshold:
+                return None
+
+            connection.execute(
+                "UPDATE task_workflows SET usage_count = usage_count + 1, "
+                "last_used_at = ? WHERE id = ?",
+                (time.time(), best_row["id"]),
+            )
+            return {
+                "id": best_row["id"],
+                "score": round(best_score, 3),
+                "intent": best_row["intent"],
+                "workflow": json.loads(best_row["workflow"]),
+            }
+
+    def record_verified(
+        self,
+        intent: str,
+        skills: list[str],
+        steps: list[dict[str, Any]],
+    ) -> None:
+        """Store a successful workflow only when the caller already verified it."""
+        if not self.enabled or not steps:
+            return
+        normalized = normalize_text(intent)
+        if not normalized:
+            return
+        now = time.time()
+        skill_key = ",".join(sorted(skills))
+        workflow = [
+            _safe_step(step["tool"], step["arguments"], step["result"])
+            for step in steps
+        ]
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO task_workflows
+                    (intent, skills, workflow, verified, usage_count,
+                     created_at, last_used_at)
+                VALUES (?, ?, ?, 1, 0, ?, ?)
+                ON CONFLICT(intent, skills) DO UPDATE SET
+                    workflow = excluded.workflow,
+                    verified = 1,
+                    last_used_at = excluded.last_used_at
+                """,
+                (
+                    normalized,
+                    skill_key,
+                    json.dumps(workflow, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+
+    @staticmethod
+    def prompt_hint(match: dict[str, Any]) -> str:
+        """Convert a cache hit into an explicit, non-authoritative LLM hint."""
+        steps = []
+        for index, step in enumerate(match["workflow"], start=1):
+            steps.append(
+                f"{index}. {step['tool']} "
+                f"{json.dumps(step['arguments'], ensure_ascii=False)}"
+            )
+        return (
+            "Có một workflow cũ tương tự trong cache (độ tương đồng "
+            f"{match['score']}). Đây chỉ là gợi ý tham khảo, KHÔNG được replay "
+            "mù; hãy kiểm tra screenshot/context và xác minh từng bước.\n"
+            + "\n".join(steps)
+        )
