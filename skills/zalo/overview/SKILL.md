@@ -29,7 +29,7 @@ keywords.
 
 ## Mẹo định vị (hợp cơ chế grounding)
 - Phần tử **CÓ chữ** (ô "Tìm kiếm", "Nhập tin nhắn", tên người, nút có chữ) → đặt
-  `keywords` = ĐÚNG chữ thấy trên màn → hệ thống khớp OCR chính xác, bấm trúng ngay.
+  `keywords` = ĐÚNG chữ thấy trên màn → giúp định vị trúng.
 - Phần tử **KHÔNG chữ** (icon gọi, sticker...) → mô tả `target` gồm loại + vị trí
   (vd "icon gọi video bên phải đầu khung"), kèm `anchor` nếu có; ĐỪNG đặt keyword chữ
   không tồn tại.

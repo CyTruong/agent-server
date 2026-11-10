@@ -10,11 +10,9 @@
    keywords ["Viết cho <X>", "Aa", "Nhắn tin"],
    anchor [tên X ở ĐẦU khung chat], relation "bottom_of",
    **area "right" hoặc "bottom"** (khung chat Messenger luôn nổi ở GÓC PHẢI‑DƯỚI).
-   LƯU Ý: ô nhập Facebook thường là contenteditable nên UI Automation KHÔNG ổn định
+   LƯU Ý: ô nhập Facebook thường không có nhãn rõ ràng
    (lúc là Edit, lúc chỉ là Text) → **luôn dựa vào keywords nhìn thấy ["Aa", "Nhắn
-   tin"]** cho nhánh vision. Có thể thêm `control "edit"` làm gợi ý phụ, nhưng TUYỆT
-   ĐỐI không bỏ keywords (nếu UIA không thấy Edit mà lại không có keywords thì mất
-   luôn đường OCR).
+   tin"]** và mô tả vị trí (đáy khung chat của X) để định vị chính xác.
 5. `type` nội dung (nếu `type` báo lỗi thì ĐỪNG nhấn Enter).
 6. `key enter` → `screenshot` xác minh tin đã xuất hiện ở đáy khung,
    thường là bong bóng màu xanh bên phải.

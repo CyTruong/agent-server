@@ -13,14 +13,10 @@
      Messenger"]), `type` tên X, `screenshot`, rồi `tap` đúng kết quả.
 4. `screenshot` xác minh: có khung chat mới ở góc phải dưới, **đầu khung ghi tên X**.
 
-## Mẹo bấm chính xác (UI Automation) — gợi ý phụ, KHÔNG thay vision
-UI Automation đôi khi bắt được nút theo nhãn/loại, nhưng nhãn Facebook hay ĐỔI theo
-trạng thái (vd "Mở đoạn chat với X" có thể thành "Lựa chọn") nên KHÔNG đáng tin. Luôn
-đặt keyword là tên X nhìn thấy; có thể thêm gợi ý phụ nếu muốn:
-- Mở Messenger: keyword "Messenger", control "button", area "top".
-- Chọn người trong danh sách/kết quả: control "listitem" + keyword tên X.
-Nếu UIA không khớp, hệ thống tự dùng vision (OCR/lưới) theo keywords — nên keyword
-tên X là BẮT BUỘC, `control` chỉ là tuỳ chọn.
+## Mẹo bấm chính xác
+- Mở Messenger: target "icon Messenger trên thanh trên cùng", area "top".
+- Chọn người: target ghi rõ "tên X trong danh sách ...", keywords [tên X] — hệ thống đọc
+  lại tên ở chỗ được chọn trước khi bấm.
 
 ## Lưu ý định vị
 - Tên X có thể xuất hiện nhiều nơi (Người liên hệ, danh sách Messenger, bài đăng):

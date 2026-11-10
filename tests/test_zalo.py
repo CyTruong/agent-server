@@ -10,22 +10,9 @@ import grounding
 import runner
 import skill_select
 import task_cache
-from matching import is_proper_name, resolve_name
-from test_runner import make_runner, ocr_box, prepared_runner
+from matching import is_proper_name
+from test_runner import make_runner
 from tools import TOOLS, split_for_type
-
-
-def text_box(text):
-    return {"text": text, "cx": 10, "cy": 10}
-
-
-@pytest.mark.parametrize("preview", ["Bạn: mai gặp An", "mai gặp An", "Nhập @, tin nhắn tới An"])
-def test_text_ending_in_the_name_is_not_certain(preview):
-    assert resolve_name(["An"], [text_box(preview)]).status == "uncertain"
-
-
-def test_full_name_is_still_certain():
-    assert resolve_name(["An"], [text_box("Trần Thị An")]).status == "certain"
 
 
 @pytest.mark.parametrize("keyword,request_text,target", [
@@ -39,60 +26,6 @@ def test_zalo_targets_are_checked_as_names(keyword, request_text, target):
 def test_input_placeholder_is_not_a_name():
     assert not is_proper_name("tin nhắn tới", "nhắn zalo cho An",
                               "ô nhập tin nhắn ở đáy khung trò chuyện")
-
-
-def bottom_of_tap():
-    return {"target": "ô nhập tin nhắn ở đáy khung trò chuyện",
-            "keywords": ["tin nhắn tới"], "anchor": ["Trường"],
-            "relation": "bottom_of", "area": "bottom"}
-
-
-def run_anchor(monkeypatch, items):
-    """Returns the anchor text the region was built from, and the click."""
-    async def go():
-        tr = prepared_runner(monkeypatch, items, confirm=False)
-        tr._img_w, tr._img_h, tr._scr_w, tr._scr_h = 1000, 600, 1000, 600
-        seen = []
-        original = tr._anchor_search
-
-        def spy(task_id, a, relation):
-            seen.append(a["text"])
-            return original(task_id, a, relation)
-        tr._anchor_search = spy
-        await tr._tap("t", bottom_of_tap())
-        return seen, tr.relay.calls, tr.asked
-    return asyncio.run(go())
-
-
-HEADER = ocr_box("Trường", 500, 25)
-PLACEHOLDER = ocr_box("Nhập @, tin nhắn tới Trường", 500, 570)
-
-
-def test_anchor_is_the_header_not_the_placeholder(monkeypatch):
-    seen, calls, asked = run_anchor(monkeypatch, [HEADER, PLACEHOLDER])
-    assert seen == ["Trường"] and not asked
-    assert calls == [("click", {"x": 500, "y": 570, "button": 1})]
-
-
-def test_anchor_is_the_header_not_a_lower_list_row(monkeypatch):
-    row = ocr_box("Trường", 120, 420)
-    seen, calls, _ = run_anchor(monkeypatch, [row, HEADER, PLACEHOLDER])
-    assert seen == ["Trường"]
-    assert calls == [("click", {"x": 500, "y": 570, "button": 1})]
-
-
-def test_anchor_picks_the_panel_that_holds_the_target(monkeypatch):
-    feed = ocr_box("Trường", 500, 25)
-    chat = ocr_box("Trường", 850, 350)
-    field = ocr_box("Aa", 850, 570)
-
-    async def go():
-        tr = prepared_runner(monkeypatch, [feed, chat, field], confirm=False)
-        tr._img_w, tr._img_h, tr._scr_w, tr._scr_h = 1000, 600, 1000, 600
-        await tr._tap("t", {"target": "ô nhập", "keywords": ["Aa"], "anchor": ["Trường"],
-                            "relation": "below"})
-        assert tr.relay.calls == [("click", {"x": 850, "y": 570, "button": 1})]
-    asyncio.run(go())
 
 
 def test_cached_hint_has_no_old_recipient():

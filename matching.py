@@ -1,50 +1,18 @@
-"""Text matching for locating on-screen elements. Pure functions, no I/O."""
+"""Text rules for taps and people's names. Pure functions, no I/O."""
 from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
 
 def _norm(s: str) -> str:
-    """Lowercase, strip Vietnamese accents (đ->d), collapse spaces - so OCR
-    misreads of diacritics still match ('Truong' == 'Trường')."""
+    """Lowercase, strip Vietnamese accents (đ->d), collapse spaces ('Truong' ==
+    'Trường'), for comparisons where accents must not matter."""
     s = (s or "").replace("đ", "d").replace("Đ", "D")
     s = unicodedata.normalize("NFKD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
     return " ".join(s.lower().split())
-
-
-def _sim(keyword: str, text: str) -> float:
-    """Fuzzy similarity of a keyword to an OCR text box (0..1)."""
-    k, t = _norm(keyword), _norm(text)
-    if not k or not t:
-        return 0.0
-    if k == t:
-        return 1.0
-    # Whole words only: "Aa" must not match "Aaron".
-    if len(k) >= 2 and re.search(rf"(?<!\w){re.escape(k)}(?!\w)", t):
-        return min(1.0, 0.85 + 0.15 * len(k) / len(t))
-    if len(t) >= 3 and t in k:            # box holds part of the keyword
-        return 0.7 * len(t) / len(k)
-    if len(k) <= 4:
-        # Too short to match approximately: "doc" ("Dọc") vs the word "do" scores
-        # 0.8 and once clicked body text "Tốc độ giao dịch" instead of a button.
-        return 0.0
-    best = SequenceMatcher(None, k, t).ratio()
-    for w in t.split():                   # keyword vs each word in the box
-        best = max(best, SequenceMatcher(None, k, w).ratio())
-    return best
-
-
-def _in_area(it: dict, area: str, w: int, h: int) -> bool:
-    cx, cy = it["cx"], it["cy"]
-    return {
-        "left": cx < w * 0.45, "right": cx > w * 0.55,
-        "top": cy < h * 0.45, "bottom": cy > h * 0.55,
-        "center": w * 0.25 < cx < w * 0.75 and h * 0.25 < cy < h * 0.75,
-    }.get(area, True)
 
 
 def _keywords_from(target: str, keywords) -> list:
@@ -66,7 +34,7 @@ def _keywords_from(target: str, keywords) -> list:
     return res
 
 
-# Where the target sits relative to a visible text anchor (OCR-found).
+# Where the target sits relative to a visible text anchor.
 _REL_VI = {
     "near": "gần", "below": "bên dưới", "above": "bên trên",
     "left_of": "bên trái", "right_of": "bên phải",
@@ -74,42 +42,12 @@ _REL_VI = {
 }
 
 
-def _relative_region(a: dict, relation: str, w: int, h: int):
-    """Search box (x0,y0,x1,y1) in image space relative to anchor box `a`.
-    Columns are widened sideways because an anchor (e.g. a chat-header name)
-    is usually narrower than the panel it heads. None if degenerate."""
-    aw, ah = a["x1"] - a["x0"], a["y1"] - a["y0"]
-    padx, pady = max(220, 2 * aw), max(30, ah)
-    if relation in ("below", "bottom_of"):
-        x0, x1, y0, y1 = a["x0"] - padx, a["x1"] + padx, a["y1"], h
-        if relation == "bottom_of":          # lowest ~40% of the panel below it
-            y0 += int((y1 - y0) * 0.6)
-    elif relation == "above":
-        x0, x1, y0, y1 = a["x0"] - padx, a["x1"] + padx, 0, a["y0"]
-    elif relation == "right_of":
-        x0, x1, y0, y1 = a["x1"], w, a["y0"] - pady, a["y1"] + pady
-    elif relation == "left_of":
-        x0, x1, y0, y1 = 0, a["x0"], a["y0"] - pady, a["y1"] + pady
-    else:                                    # near
-        x0, x1, y0, y1 = a["x0"] - padx, a["x1"] + padx, a["y0"] - 150, a["y1"] + 150
-    x0, y0 = max(0, int(x0)), max(0, int(y0))
-    x1, y1 = min(w, int(x1)), min(h, int(y1))
-    if x1 - x0 < 40 or y1 - y0 < 20:
-        return None
-    return x0, y0, x1, y1
-
-
-def _in_region(it: dict, r) -> bool:
-    return r is None or (r[0] <= it["cx"] <= r[2] and r[1] <= it["cy"] <= r[3])
-
-
 # --- Proper names ------------------------------------------------------------
 # A wrong accent is a different person here ("Trường"/"Tường", "Tâm"/"Tám"), so
-# names get their own accent-aware, whole-word matching instead of _sim().
+# names get their own accent-aware, whole-word matching.
 
 EXACT, SUFFIX, PARTIAL, ACCENT, FUZZY, NONE = (
     "exact", "suffix", "partial", "accent", "fuzzy", "none")
-_RANK = {EXACT: 5, SUFFIX: 4, PARTIAL: 3, ACCENT: 2, FUZZY: 1, NONE: 0}
 CERTAIN_MATCHES = (EXACT, SUFFIX)
 _FUZZY_MIN = 0.8
 
@@ -157,7 +95,7 @@ def name_match(name: str, text: str) -> str:
     n, t = _words(name), _words(text)
     if not n or not t:
         return NONE
-    if n == t or "".join(n) == "".join(t):   # OCR often drops a space: "AVinh"
+    if n == t or "".join(n) == "".join(t):   # a dropped space: "AVinh"
         return EXACT
     i = _seq_at(n, t)
     if i >= 0:
@@ -169,49 +107,6 @@ def name_match(name: str, text: str) -> str:
     ratio = max([SequenceMatcher(None, joined, " ".join(bare_t)).ratio()]
                 + [SequenceMatcher(None, joined, w).ratio() for w in bare_t])
     return FUZZY if ratio >= _FUZZY_MIN else NONE
-
-
-@dataclass
-class NameResolution:
-    """status: 'certain' (click it), 'uncertain' (ask first; box is the best
-    guess) or 'none' (the name is not on screen)."""
-    status: str
-    box: dict | None = None
-    candidates: list = field(default_factory=list)   # every matching box, best first
-
-
-def name_rank(names: list, text: str) -> int:
-    """Quality of the best match of any of `names` in `text`; higher is better."""
-    return max((_RANK[name_match(n, text)] for n in names), default=0)
-
-
-def is_lossy_read(names: list, text: str) -> bool:
-    """Could `text` be the name with its accents or letters misread by OCR? Other
-    mismatches ('Trường Đại học') are different text, so re-reading cannot help."""
-    return 0 < name_rank(names, text) <= _RANK[ACCENT]
-
-
-def resolve_name(names: list, items: list) -> NameResolution:
-    """Find the box for a person among OCR `items`."""
-    scored = []
-    for item in items or []:
-        quality = max((name_match(n, item.get("text", "")) for n in names),
-                      key=_RANK.__getitem__, default=NONE)
-        if quality != NONE:
-            scored.append((quality, item))
-    if not scored:
-        return NameResolution("none")
-    scored.sort(key=lambda pair: -_RANK[pair[0]])
-    boxes = [item for _quality, item in scored]
-    top_quality = scored[0][0]
-    if top_quality == EXACT:
-        return NameResolution("certain", boxes[0], boxes)
-    if top_quality == SUFFIX:
-        # One full name ending in it is the person; two different ones is ambiguous.
-        suffixes = {" ".join(_words(i["text"])) for q, i in scored if q == SUFFIX}
-        status = "certain" if len(suffixes) == 1 else "uncertain"
-        return NameResolution(status, boxes[0], boxes)
-    return NameResolution("uncertain", boxes[0], boxes)
 
 
 # Kinship words, full or abbreviated as in contact names ("A Vinh" = anh Vinh).
@@ -268,27 +163,6 @@ def name_matches_request(keyword: str, request: str) -> bool:
         if _seq_at(wanted, core) >= 0 or _seq_at(core, wanted) >= 0:
             return True
     return False
-
-
-def namesakes(keyword: str, request: str, items: list, chosen: str) -> list:
-    """Other people on screen sharing the core of a name the model inferred (the
-    user said "anh Vinh", the model chose "A Vinh", "Vinh Kế toán" is also listed).
-    Nothing to disambiguate when the user wrote the keyword literally."""
-    words = _words(keyword)
-    if _seq_at(words, _words(request)) >= 0:
-        return []
-    core = [_norm(w) for w in _core_words(words)]
-    same = {"".join(words), "".join(_words(chosen))}
-    found = []
-    for item in items or []:
-        text = item.get("text", "")
-        text_words = _words(text)
-        if (text[:1].isupper() and len(text_words) <= 6
-                and not any(c in text for c in ":@,?!")
-                and "".join(text_words) not in same
-                and _seq_at(core, [_norm(w) for w in text_words]) >= 0):
-            found.append(item)
-    return found
 
 
 def is_proper_name(keyword: str, request: str, target: str = "") -> bool:

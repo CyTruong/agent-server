@@ -39,7 +39,7 @@ BASE_PROMPT = (
 )
 
 # Skills live in groups: skills/<group>/<name>/SKILL.md, keyed "group/name".
-#   common/*   - how to SEE and LOCATE (screenshot, grid, OCR, anchors). No task
+#   common/*   - how to SEE and LOCATE (screenshot, grid, zoom, anchors). No task
 #                procedures. Loaded for every task.
 #   windows/*  - general PC tasks, loaded on a keyword hit.
 #   facebook/* - facebook.com (Chrome, Vietnamese UI). The group switches on only

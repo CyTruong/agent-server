@@ -87,7 +87,7 @@ class ReadingTracker:
             self._seen.append(key)
             fresh.append(line)
         # Nothing new: no fresh line at all, or on a full page only a stray one or
-        # two (a page number, OCR noise) out of ten or more.
+        # two (a page number, a misread line) out of ten or more.
         nothing_new = self._moved and (
             not fresh or (len(lines) >= 10 and len(fresh) <= len(lines) // 10))
         if self._moved:

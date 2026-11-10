@@ -2,14 +2,12 @@
 import asyncio
 import io
 
-import pytest
 from PIL import Image
 
 import grounding
-import ocr
 import runner
-from regions import ZOOM_AREAS, fraction_box, image_box_to_screen, ocr_lines
-from test_runner import ocr_box, reply, scripted_llm, tool_call
+from regions import ZOOM_AREAS, fraction_box, image_box_to_screen
+from test_runner import reply, scripted_llm, tool_call
 from tools import TOOL_NAMES, is_dangerous
 
 
@@ -53,15 +51,21 @@ class RegionRelay:
         return [m for m in self.ui if m["type"] in ("done", "error")]
 
 
-def region_runner(monkeypatch, supports_region=True, ocr_items=None):
+def region_runner(monkeypatch, supports_region=True, text=""):
+    """A runner on RegionRelay whose vision model reads `text` from any image."""
     monkeypatch.setattr(runner, "CACHE_ENABLED", False)
     monkeypatch.setattr(runner, "PLAN_ENABLE", False)
     monkeypatch.setattr(grounding, "SAVE_IMAGES", False)
     monkeypatch.setattr(runner, "FIRST_LOOK", False)   # tests that want it turn it on
-    monkeypatch.setattr(ocr, "run_ocr", lambda image, lang: ocr_items or [])
     relay = RegionRelay(supports_region)
     tr = runner.TaskRunner(relay)
     tr._shot_size = (1280, 720)
+    tr.read_calls = []
+
+    async def read(task_id, image, purpose=""):
+        tr.read_calls.append(purpose)
+        return text
+    tr._read_image = read
     return tr
 
 
@@ -72,20 +76,13 @@ def test_region_maths():
     assert image_box_to_screen([0, 0, 2, 2], 1280, 720, 1920, 1080)[2:] == (16, 16)
 
 
-def test_ocr_lines_reads_in_order():
-    items = [{"text": "World", "cx": 80, "cy": 11, "y0": 5, "y1": 17},
-             {"text": "Hello", "cx": 20, "cy": 10, "y0": 4, "y1": 16},
-             {"text": "Next", "cx": 20, "cy": 40, "y0": 34, "y1": 46}]
-    assert ocr_lines(items) == "Hello  World\nNext"
-
-
 def test_zoom_tool_is_registered_and_safe():
     assert "zoom" in TOOL_NAMES and not is_dangerous("zoom", {"area": "title"})
 
 
 def test_zoom_title_asks_for_the_title_bar_at_native_resolution(monkeypatch):
     async def go():
-        tr = region_runner(monkeypatch, ocr_items=[ocr_box("Ho-so.docx - Word", 400, 20)])
+        tr = region_runner(monkeypatch, text="Ho-so.docx - Word")
         result = await tr._run_tool("t", "zoom", {"area": "title"})
         assert tr.relay.calls == [("screenshot", {"region": [0, 0, 1920, 54]})]
         assert "độ phân giải thật" in result and "Ho-so.docx - Word" in result
@@ -129,34 +126,6 @@ def test_zoom_image_reaches_the_model_with_its_own_caption(monkeypatch):
         notes = [m["content"] for m in seen[-1]["messages"]
                  if isinstance(m, dict) and m.get("images")]
         assert len(notes) == 1 and notes[0].startswith("Ảnh PHÓNG TO vùng title")
-    asyncio.run(go())
-
-
-def test_tap_reads_small_ribbon_text_at_native_resolution(monkeypatch):
-    async def go():
-        tr = region_runner(monkeypatch, ocr_items=[ocr_box("Vertical", 700, 120)])
-        tr._raw_frame, tr._frame_hash = jpeg(1280, 720), "h"
-        tr._frame_at = runner.time.monotonic()
-        tr._img_w, tr._img_h, tr._scr_w, tr._scr_h = 1280, 720, 1920, 1080
-        monkeypatch.setattr(grounding, "UIA_ENABLE", False)
-
-        async def no_ocr(task_id):
-            return [ocr_box("Tốc độ giao dịch", 447, 435)]     # scaled shot: no ribbon text
-        tr._ocr_items = no_ocr
-        result = await tr._tap("t", {"target": "nút Vertical trên ribbon",
-                                     "keywords": ["Vertical"], "area": "top"})
-        assert "OCR-native" in result
-        assert tr.relay.calls[0] == ("screenshot", {"region": [0, 0, 1920, 486]})
-        assert tr.relay.calls[-1] == ("click", {"x": 700, "y": 120, "button": 1})
-    asyncio.run(go())
-
-
-@pytest.mark.parametrize("supports_region", [False])
-def test_tap_does_not_use_a_cropped_fallback(monkeypatch, supports_region):
-    async def go():
-        tr = region_runner(monkeypatch, supports_region, [ocr_box("Vertical", 700, 120)])
-        tr._img_w, tr._img_h, tr._scr_w, tr._scr_h = 1280, 720, 1920, 1080
-        assert await tr._tap_native_ocr("t", ["Vertical"], "top", None) is None
     asyncio.run(go())
 
 

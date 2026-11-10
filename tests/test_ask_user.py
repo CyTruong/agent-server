@@ -6,7 +6,7 @@ import pytest
 import runner
 from intents import parse_choice
 from matching import is_proper_name
-from test_runner import make_runner, ocr_box, prepared_runner, reply, scripted_llm, tool_call
+from test_runner import make_runner, reply, scripted_llm, tool_call
 from tools import is_dangerous
 
 FILES = ["Ho-so-du-an-bo-mach.docx — 20 ngày trước", "Ho-so-du-an-cu.docx — 2 năm trước"]
@@ -72,21 +72,6 @@ def test_no_answer_tells_the_model_not_to_guess(monkeypatch):
 ])
 def test_parse_choice(answer, expected):
     assert parse_choice(answer, ["Zalo", "Facebook"]) == expected
-
-
-def test_uncertain_name_offers_each_candidate_and_clicks_the_choice(monkeypatch):
-    async def go():
-        tr = prepared_runner(monkeypatch, [ocr_box("Tường", 20, 10), ocr_box("Trương", 80, 40)])
-
-        async def pick_second(task_id, question, options):
-            tr.asked.append(options)
-            return 1, "2"
-        tr._ask_choice = pick_second
-        await tr._tap("t", {"target": "liên hệ Trường", "keywords": ["Trường"]})
-        assert len(tr.asked[0]) == 3 and "Không phải" in tr.asked[0][-1]
-        assert tr.asked[0][1].startswith("Tường")          # best match first
-        assert tr.relay.calls == [("click", {"x": 40, "y": 20, "button": 1})]
-    asyncio.run(go())
 
 
 def test_windows_search_runs_without_confirmation():

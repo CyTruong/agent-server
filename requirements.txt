@@ -3,20 +3,8 @@ websockets>=13.0
 python-dotenv>=1.0.0
 pillow>=10.0.0
 numpy>=1.24.0
-# OCR Set-of-Mark (CPU), keeps Vietnamese accents. It pulls in torch AND
-# torchvision: install BOTH together from the CPU index FIRST. Installing only
-# torch lets easyocr fetch a mismatched torchvision from PyPI, which fails with
-# "operator torchvision::nms does not exist".
-#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-easyocr>=1.7.1
-# Optional fallback OCR (OCR_BACKEND=auto tries it when EasyOCR is missing). Drops
-# most Vietnamese accents. Pinned to 2.x: the 3.x API changed ocr().
-#   pip install "paddleocr>=2.7,<3.0" "paddlepaddle>=2.6.0"
 # web_search tool (SEARCH_BACKEND=ddgs). No API key. Tavily uses only stdlib.
 ddgs>=6.0
 # Optional: cleaner main-content extraction for fetch_url / SEARCH_FETCH.
 # Code falls back to a regex tag-strip if this is missing.
 trafilatura>=1.8.0
-# Set-of-Mark UI-box detection (ui_boxes.py). Usually already pulled in by the
-# OCR package; listed so it's present even without OCR. Code no-ops if missing.
-opencv-python-headless>=4.8.0

@@ -5,7 +5,7 @@ import asyncio
 
 import runner
 from test_region import region_runner
-from test_runner import ocr_box, reply, scripted_llm
+from test_runner import reply, scripted_llm
 
 T2 = "Mở zalo và gửi lời chào đến anh vinh cho tôi"
 T4 = "Mở văn bản Ho-so-du-an-bo-mach-may-ban-hang-tu-dong và tóm tắt nội dung"
@@ -48,9 +48,8 @@ def test_follow_up_naming_no_app_keeps_context():
 
 def first_look_run(monkeypatch, title, request=T5, history=()):
     async def go():
-        tr = region_runner(monkeypatch, ocr_items=[ocr_box(title, 600, 20)])
+        tr = region_runner(monkeypatch, text=title)
         monkeypatch.setattr(runner, "FIRST_LOOK", True)
-        monkeypatch.setattr(runner, "READ_NOTES", "ocr")
         tr._history = list(history)
         seen = scripted_llm(monkeypatch, [reply("CO"), reply("xong"), reply("xong")])
         await tr.run_task("t", request)

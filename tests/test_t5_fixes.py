@@ -7,7 +7,7 @@ import grounding
 import llm
 import runner
 from runner import _same_name
-from test_runner import make_runner, ocr_box, prepared_runner, reply, scripted_llm, tool_call
+from test_runner import make_runner, reply, scripted_llm, tool_call
 
 SUMMARY = "Tóm tắt văn bản:\n\n1. **Tên dự án**: Bo mạch\n2. **Khách hàng**: bán lẻ"
 
@@ -88,18 +88,11 @@ def test_third_identical_failure_is_not_sent(monkeypatch):
 
 # 3. coordinates in the model's units -------------------------------------------------
 
-def test_tap_reports_image_coordinates(monkeypatch):
-    async def go():
-        tr = prepared_runner(monkeypatch, [ocr_box("Gửi", 60, 30)])
-        result = await tr._tap("t", {"target": "nút Gửi", "keywords": ["Gửi"]})
-        assert "tại điểm (60,30) trên ảnh" in result
-        assert tr.relay.calls[0][1] == {"x": 120, "y": 60, "button": 1}   # screen
-    asyncio.run(go())
-
 
 def test_move_reports_image_coordinates(monkeypatch):
     async def go():
-        tr = prepared_runner(monkeypatch, [])
+        tr = make_runner(monkeypatch)
+        tr._img_w, tr._img_h, tr._scr_w, tr._scr_h = 100, 50, 200, 100
         monkeypatch.setattr(grounding, "REFINE_CLICK", False)
         result = await tr._run_tool("t", "move", {"x": 40, "y": 20})
         assert result == "ok: move tại điểm (40,20) trên ảnh"
@@ -112,7 +105,6 @@ def test_move_reports_image_coordinates(monkeypatch):
 def reading_mode_run(monkeypatch, request, calls):
     async def go():
         tr = make_runner(monkeypatch)
-        monkeypatch.setattr(runner, "READ_NOTES", "model")
         copied = []
 
         async def fake_shot(task_id, *, force=False, attach=True):
@@ -161,26 +153,12 @@ def test_marker_only_counts_when_it_is_the_whole_answer(monkeypatch, answer, exp
         async def fake_chat(**kwargs):
             return reply(answer)
         monkeypatch.setattr(llm, "chat", fake_chat)
-        assert await tr._transcribe_page("t") == expected
+        # make_runner stubs transcription out; call the real method.
+        assert await runner.TaskRunner._transcribe_page(tr, "t") == expected
     asyncio.run(go())
 
 
 # 6. name labels and Enter in Windows Search -----------------------------------------------
-
-def test_confirmed_name_replaces_the_ocr_text(monkeypatch):
-    async def go():
-        tr = prepared_runner(monkeypatch, [])
-        box = ocr_box("2 Vinh", 50, 20)
-        tr._name_crop = lambda b: b"png"
-
-        async def read(task_id, png):
-            return ["A Vinh"]
-        tr._read_crop = read
-        res = grounding.NameResolution("uncertain", box, [box])
-        out = await tr._reread_names("t", ["A Vinh"], res)
-        assert out.status == "certain" and out.box["text"] == "A Vinh"
-        assert out.candidates[0]["text"] == "A Vinh"
-    asyncio.run(go())
 
 
 @pytest.mark.parametrize("query,shown,expected", [
@@ -204,10 +182,9 @@ def search_runner(monkeypatch, top_text):
         return "ok"
     tr._screenshot = fake_shot
 
-    async def items(task_id):
-        return [ocr_box("Best match", 100, 100), ocr_box(top_text, 110, 140),
-                ocr_box("App", 110, 160)]
-    tr._ocr_items = items
+    async def top(task_id):
+        return top_text
+    tr._top_search_result = top
     return tr
 
 

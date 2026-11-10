@@ -73,7 +73,7 @@ def crop_image(image: bytes, box: tuple):
 
 
 def upscale(image: bytes, factor: int = 2) -> bytes:
-    """The image enlarged (PNG) so OCR can read small text; the input on failure."""
+    """The image enlarged (PNG) so small text is readable; the input on failure."""
     try:
         from io import BytesIO
         from PIL import Image

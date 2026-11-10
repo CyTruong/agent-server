@@ -35,31 +35,13 @@ REFINE_CLICK = os.environ.get("REFINE_CLICK", "true").lower() in ("1", "true", "
 # point it actually clicked) to a folder, for after-the-fact inspection.
 SAVE_IMAGES = os.environ.get("SAVE_IMAGES", "true").lower() in ("1", "true", "yes")
 IMAGE_DIR = os.environ.get("IMAGE_DIR", "debug_images")
-# OCR Set-of-Mark locate: find text regions, label them, let the model pick one
-# by number (exact coords from OCR). Falls back to the 3x3 grid when OCR finds
-# nothing or the target has no text. Needs easyocr (CPU); see ocr.py.
-OCR_ENABLE = os.environ.get("OCR_ENABLE", "true").lower() in ("1", "true", "yes")
-OCR_LANG = os.environ.get("OCR_LANG", "vi")
 # web_search tool: let the model look things up on the Internet from the server
 # (ddgs/tavily). Off -> the tool returns a disabled note. See web_search.py.
 SEARCH_ENABLE = os.environ.get("SEARCH_ENABLE", "true").lower() in ("1", "true", "yes")
-# (C) UI Automation: before any vision, ask the PC for a control's REAL screen
-# coords by name (MomoBleAgent.ps1 "uia" command). Exact, scale-free. Falls
-# through to OCR/marks/grid when the element isn't exposed (e.g. canvas-rendered).
-UIA_ENABLE = os.environ.get("UIA_ENABLE", "true").lower() in ("1", "true", "yes")
-UIA_TIMEOUT = float(os.environ.get("UIA_TIMEOUT", "8"))
-# UIA Set-of-Mark: when name/type lookup misses, ask the PC to number every
-# interactive control on a screenshot (exact boxes from the accessibility tree)
-# and let the LLM pick one; the number->coords map stays on the PC. Great for
-# browser UIs that expose a11y. Falls through to OCR when no controls / no pick.
-UIA_MARKS_ENABLE = os.environ.get("UIA_MARKS_ENABLE", "true").lower() in ("1", "true", "yes")
-# (B) UI-TARS grounding: a GUI-specialist model does the "where to click" job
-# while qwen stays the brain (instruction/planning/chat). On a tap we send the
-# screenshot + element description to UI-TARS, which returns click coords. Only
-# one model runs at a time: Ollama swaps UI-TARS in (a few seconds on a 12GB GPU,
-# evicting qwen) then swaps qwen back for the next reasoning call. Create the
-# model in Ollama first (see Modelfile) and set UITARS_MODEL to its tag.
-UITARS_ENABLE = os.environ.get("UITARS_ENABLE", "false").lower() in ("1", "true", "yes")
+# UI-TARS points at the element for EVERY tap (there is no OCR): the main model
+# (qwen3-vl) plans and reads text, UI-TARS only says where to click. Only one model
+# fits a 12GB GPU, so Ollama swaps UI-TARS in for each tap and qwen back after.
+# Create the model in Ollama first (UI-TARS-SETUP.md) and set UITARS_MODEL.
 UITARS_MODEL = os.environ.get("UITARS_MODEL", "ui-tars")
 UITARS_NUM_CTX = int(os.environ.get("UITARS_NUM_CTX", "4096"))
 UITARS_TIMEOUT = float(os.environ.get("UITARS_TIMEOUT", "90"))
@@ -76,30 +58,10 @@ UITARS_FULLRES = os.environ.get("UITARS_FULLRES", "false").lower() in ("1", "tru
 # 'norm1000' = 0..1000 normalised, 'auto' = guess (>1000 -> image, else norm1000).
 # Calibrate once from the 'tars raw=... -> screen' log, then pin it explicitly.
 UITARS_COORD = os.environ.get("UITARS_COORD", "auto").lower()
-# For a target with no text keywords, ask UI-TARS before the other vision layers.
-# Targets with keywords always try OCR first. Checking people's names by OCR comes
-# before all of it: UI-TARS returns only a point and cannot tell two names apart.
-UITARS_BEFORE_OCR = os.environ.get("UITARS_BEFORE_OCR", "true").lower() in ("1", "true", "yes")
 # Plan-and-execute: for a multi-step request, make one text-only LLM call first to
 # decompose it into a numbered step list, then keep that list in context as a
 # checklist. Cheap (~1 call), no extra VRAM. Simple tasks skip it (see _needs_plan).
 PLAN_ENABLE = os.environ.get("PLAN_ENABLE", "true").lower() in ("1", "true", "yes")
-# Set-of-Mark locate: between OCR keyword-match and the 3x3 grid, number every
-# candidate box (OCR text boxes + OpenCV-detected UI boxes incl. text-less ones)
-# and let the model pick one by number. Catches empty inputs / icon buttons.
-MARKS_ENABLE = os.environ.get("MARKS_ENABLE", "true").lower() in ("1", "true", "yes")
-MARKS_MAX = int(os.environ.get("MARKS_MAX", "40"))   # labels drawn (legibility cap)
-# Inside the 3x3 descent, run OCR on the (small) region in parallel with the grid
-# LLM once this many splits have been applied (>= 2 keeps OCR to small regions
-# where its text reading is reliable).
-OCR_PARALLEL_MIN_SPLITS = int(os.environ.get("OCR_PARALLEL_MIN_SPLITS", "2"))
-# Keyword-vs-OCR-text similarity (0..1) at/above which a box counts as a match
-# and is clicked directly, without asking the LLM.
-OCR_MATCH_MIN = float(os.environ.get("OCR_MATCH_MIN", "0.8"))
-# A VERY confident OCR keyword match (>= this) is clicked directly (before UI-TARS
-# when UITARS_BEFORE_OCR=false). A text-labelled target ("Aa", "Gửi") is read more precisely by OCR than
-# a VLM points at it, so OCR wins first; UI-TARS handles the text-less/icon cases.
-OCR_EXACT_MIN = float(os.environ.get("OCR_EXACT_MIN", "0.8"))
 
 # qwen3-vl is a "thinking" model: left on, it burns the whole generation on a
 # reasoning monologue and never emits the tool call (blank turns, 80s/step).
@@ -129,24 +91,15 @@ CONTEXT_RESULT_CHARS = int(os.environ.get("CONTEXT_RESULT_CHARS", "600"))
 # Stop a task after this many screenshots in a row showed no change after the
 # actions before them (e.g. scrolling past the end of a document). 0 = never.
 STUCK_LIMIT = int(os.environ.get("STUCK_LIMIT", "3"))
-# Capture small screen regions at native resolution (needs the matching firmware
-# and PC agent; falls back to cropping the full screenshot when they are older).
-NATIVE_CAPTURE = os.environ.get("NATIVE_CAPTURE", "true").lower() in ("1", "true", "yes")
-# How a page read while reading a document/chat is kept in the conversation
-# (screenshots are pruned, text is not):
-#   model - the vision model transcribes each page (one extra LLM call per page)
-#   ocr   - the OCR text of each page
-#   both  - OCR decides whether a page has anything new (cheap, stable); the
-#           model transcribes the pages that do. Default.
-READ_NOTES = os.environ.get("READ_NOTES", "both").lower()
-# Above this many characters of page notes, the model condenses them.
+# While reading a document/chat page by page, the vision model transcribes each
+# page into the conversation (screenshots are pruned, text is not). Above this
+# many characters of page notes, the model condenses them.
 NOTES_MAX_CHARS = int(os.environ.get("NOTES_MAX_CHARS", "6000"))
 # Take a screenshot and read the window title as soon as a task that works on the
 # screen starts, so earlier context or cached workflows are checked against what
 # is really in front instead of being trusted.
 FIRST_LOOK = os.environ.get("FIRST_LOOK", "true").lower() in ("1", "true", "yes")
 SCREEN_CACHE_TTL = float(os.environ.get("SCREEN_CACHE_TTL_SECONDS", "6.0"))
-OCR_CACHE_TTL = float(os.environ.get("OCR_CACHE_TTL_SECONDS", "6.0"))
 SCREEN_MUTATING_TOOLS = frozenset({
     "move",
     "click",

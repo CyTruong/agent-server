@@ -11,8 +11,7 @@ relay_client (WebSocket), tools (schemas and risk rules). Settings: .env.example
 """
 import asyncio
 
-from config import AGENT_TOKEN, CA_FILE, MODEL, OCR_ENABLE, RELAY_URL, UIA_ENABLE, \
-    UIA_MARKS_ENABLE, UITARS_ENABLE, UITARS_MODEL
+from config import AGENT_TOKEN, CA_FILE, MODEL, RELAY_URL, UITARS_MODEL
 from relay_client import RelayClient
 from sessions import SessionManager
 
@@ -23,9 +22,7 @@ async def main():
     relay = RelayClient(RELAY_URL, AGENT_TOKEN, CA_FILE)
     SessionManager(relay)  # one TaskRunner per device; registers chat/cancel handlers
     print(f"[agent] model={MODEL} relay={RELAY_URL}")
-    print(f"[agent] grounding: uia={UIA_ENABLE} uia_marks={UIA_MARKS_ENABLE} "
-          f"ocr={OCR_ENABLE} ui-tars="
-          + (f"{UITARS_MODEL}" if UITARS_ENABLE else "off"))
+    print(f"[agent] đọc chữ: {MODEL} | định vị (tap): UI-TARS {UITARS_MODEL}")
     await relay.run_forever()
 
 

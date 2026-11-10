@@ -56,17 +56,3 @@ def image_box_to_screen(box, image_w: int, image_h: int, screen_w: int, screen_h
     h = min(screen_h, round(y1 * sy) + pad) - y
     return x, y, max(MIN_SIDE, w), max(MIN_SIDE, h)
 
-
-def ocr_lines(items: list, limit: int = 1500) -> str:
-    """OCR boxes as reading-order lines (top to bottom, left to right)."""
-    rows = []
-    for item in sorted(items or [], key=lambda it: (it["cy"], it["cx"])):
-        height = max(8, item.get("y1", item["cy"]) - item.get("y0", item["cy"]))
-        if rows and abs(rows[-1][0] - item["cy"]) <= height * 0.6:
-            rows[-1][1].append(item)
-        else:
-            rows.append([item["cy"], [item]])
-    lines = ["  ".join(it["text"] for it in sorted(row, key=lambda it: it["cx"]))
-             for _, row in rows]
-    text = "\n".join(line for line in lines if line.strip())
-    return text if len(text) <= limit else text[:limit] + " …"

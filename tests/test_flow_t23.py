@@ -3,30 +3,12 @@ import asyncio
 
 import grounding
 import skill_select
-from matching import _sim
-from test_runner import make_runner, ocr_box, prepared_runner, reply, scripted_llm, tool_call
+from test_runner import make_runner, reply, scripted_llm, tool_call
 
 T23 = "Mở tài liệu Ho-so-du-an-bo-mach-may-ban-hang-tu-dong và tóm tắt cho tôi"
 
 
 # A: short keywords and the top area -----------------------------------------------
-
-def test_short_keyword_does_not_match_a_similar_word():
-    assert _sim("Dọc", "Toc dộ giao dịch") < 0.8
-    assert _sim("Dọc", "Dọc") == 1.0 and _sim("Gửi", "Gui") == 1.0
-    assert _sim("Vertical", "Verticai") >= 0.8          # longer words still fuzzy
-
-
-def test_top_target_is_not_taken_from_page_content(monkeypatch):
-    async def go():
-        tr = prepared_runner(monkeypatch, [ocr_box("Dọc", 50, 40)])   # y=40 of 50: page
-        pt = await tr._tap_ocr("t", "nút Vertical", ["Dọc"], "top",
-                               await tr._ocr_items("t"), thr=0.8)
-        assert pt is None
-        pt = await tr._tap_ocr("t", "nút Vertical", ["Dọc"], "center",
-                               [ocr_box("Dọc", 50, 40)], thr=0.8)
-        assert pt == (50, 40)                           # other areas only rank
-    asyncio.run(go())
 
 
 # B: Enter in Windows Search ---------------------------------------------------------

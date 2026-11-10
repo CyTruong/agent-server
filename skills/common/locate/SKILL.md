@@ -1,12 +1,11 @@
 # [Chung] Định vị phần tử để bấm
 
 ## Công cụ `tap` (ưu tiên hơn click toạ độ)
-`tap(target, keywords, area, anchor, relation)` — hệ thống tự tìm vị trí (UIA, OCR kể cả
-chụp vùng ở độ phân giải thật, rồi các lớp dự phòng). **Tên người phải đúng dấu**; không
-chắc thì hệ thống hỏi người dùng trước khi bấm.
+`tap(target, keywords, area, anchor, relation)` — UI-TARS tìm vị trí theo mô tả. **Tên
+người phải đúng dấu**: hệ thống đọc lại chỗ được chọn, không chắc thì hỏi trước khi bấm.
 
 ## Điền tham số cho chính xác
-- `target`: mô tả ngắn, cụ thể ("ô nhập tin nhắn khung chat Trường").
+- `target`: cụ thể = loại phần tử + vị trí + chữ trên nó ("ô nhập tin nhắn khung chat Trường").
 - `keywords`, `anchor`: CHỈ gồm chữ NHÌN THẤY trên hoặc sát phần tử, đúng chính tả
   như ảnh, không thêm lời mô tả: tên người,
   nhãn nút, chữ gợi ý trong ô. Nhiều biến thể càng tốt (["Gửi", "Send"]).

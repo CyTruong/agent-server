@@ -10,7 +10,6 @@ import traceback
 import config  # noqa: F401 - must load .env before web_search reads os.environ
 import agent_log
 import llm
-import ocr
 import web_search
 from agent_log import clip, dump_messages, log
 from config import (
@@ -33,10 +32,7 @@ from config import (
     NOTES_MAX_CHARS,
     NT,
     NUM_CTX,
-    OCR_ENABLE,
-    OCR_LANG,
     PLAN_ENABLE,
-    READ_NOTES,
     SCREEN_CACHE_TTL,
     SCREEN_MUTATING_TOOLS,
     SEARCH_ENABLE,
@@ -45,9 +41,9 @@ from config import (
     THINK,
 )
 from grounding import GroundingMixin
-from imaging import annotate_grid, crop_image, image_size, prune_images, upscale
+from imaging import annotate_grid, crop_image, image_size, prune_images
 from progress import ProgressWatch, ReadingTracker
-from regions import ZOOM_AREAS, fraction_box, image_box_to_screen, ocr_lines
+from regions import ZOOM_AREAS, fraction_box, image_box_to_screen
 from intents import (
     _is_ask_or_blocked,
     _needs_delivery,
@@ -56,7 +52,7 @@ from intents import (
     parse_yes_no,
 )
 from relay_client import RelayClient, new_request_id
-from matching import _sim, requested_persons
+from matching import requested_persons
 from skill_select import build_system_prompt, gated_groups
 from task_cache import TaskCache, is_verified_workflow
 from tools import TOOLS, TOOL_NAMES, is_dangerous, split_for_type
@@ -90,10 +86,8 @@ NEVER_BLOCKED = ("screenshot", "zoom", "ask_user", "web_search", "fetch_url")
 # Errors that are instructions from the agent, not failures of the action.
 GUIDANCE_ERRORS = ("CHƯA nhấn Enter", "KHÔNG mở lại", "KHÔNG chạy")
 NOTHING_NEW = "KHÔNG CÓ NỘI DUNG MỚI"
-SEARCH_TOP_LABELS = ("Best match", "Kết quả phù hợp nhất", "Phù hợp nhất")
 
 MODEL_NOTE_HEAD = "Ghi chú trang này (model chép lại)"
-OCR_NOTE_HEAD = "Chữ MỚI trên trang này (OCR, có thể sai chính tả)"
 SUMMARY_HEAD = "Ghi chú tổng hợp các trang đã đọc (đã tóm gọn):"
 
 # Skills that read page by page; their screenshots get the page text attached.
@@ -103,7 +97,7 @@ READING_SKILLS = ("word/read-file", "word/find-related", "zalo/read-chat",
 
 def _file_key(text: str) -> str:
     """Lowercase letters/digits only, accents removed: compares file names with
-    window titles regardless of "-", "_", spaces or OCR dropping accents."""
+    window titles regardless of "-", "_", spaces or a misread accent."""
     import unicodedata
     text = unicodedata.normalize("NFKD", (text or "").replace("đ", "d").replace("Đ", "D"))
     text = "".join(c for c in text if not unicodedata.combining(c)).lower()
@@ -135,9 +129,6 @@ class TaskRunner(GroundingMixin):
         self._raw_frame: bytes | None = None   # last screenshot, no grid (for zoom)
         self._frame_hash = ""
         self._frame_at = 0.0
-        self._ocr_cache_hash = ""
-        self._ocr_cache_at = 0.0
-        self._ocr_cache_items: list[dict] | None = None
         self._executed_steps: list[dict] = []
         self._approved_names: set[str] = set()   # confirmed by the user in this task
         self._task_text = ""                     # current request (for refine prompt)
@@ -243,14 +234,11 @@ class TaskRunner(GroundingMixin):
         )
 
     def _invalidate_screen_cache(self) -> None:
-        """Drop volatile screen/OCR state after a UI-changing action."""
+        """Drop volatile screen state after a UI-changing action."""
         self._raw_frame = None
         self._pending_image = None
         self._frame_hash = ""
         self._frame_at = 0.0
-        self._ocr_cache_hash = ""
-        self._ocr_cache_at = 0.0
-        self._ocr_cache_items = None
         self._img_w = self._img_h = 0
         self._scr_w = self._scr_h = 0
 
@@ -259,9 +247,6 @@ class TaskRunner(GroundingMixin):
         self._raw_frame = image
         self._frame_hash = hashlib.sha256(image).hexdigest()
         self._frame_at = time.monotonic()
-        self._ocr_cache_hash = ""
-        self._ocr_cache_at = 0.0
-        self._ocr_cache_items = None
         annotated, (width, height) = annotate_grid(image)
         self._img_w, self._img_h = width, height
         self._shot_size = (width, height)
@@ -814,14 +799,7 @@ class TaskRunner(GroundingMixin):
             return "error: không chụp được vùng này"
         self._save(task_id, f"zoom_{area or 'box'}", image,
                    "jpg" if image[:2] == b"\xff\xd8" else "png")
-        text = ""
-        if OCR_ENABLE:
-            try:
-                items = await asyncio.get_running_loop().run_in_executor(
-                    None, ocr.run_ocr, image if native else upscale(image), OCR_LANG)
-                text = ocr_lines(items) if items else ""
-            except Exception as e:  # noqa: BLE001
-                log(f"[{task_id}] zoom OCR lỗi: {e}")
+        text = await self._read_image(task_id, image, f"vùng {label} của màn hình") or ""
         how = ("độ phân giải thật" if native else
                "cắt từ ảnh toàn màn hình vì thiết bị chưa hỗ trợ chụp vùng")
         log(f"[{task_id}] zoom {label} -> màn hình ({x},{y}) {w}x{h}, {how}")
@@ -830,7 +808,8 @@ class TaskRunner(GroundingMixin):
                               f"{how}. Chỉ để ĐỌC; muốn bấm thì dùng tap với keywords là chữ "
                               "đọc được ở đây.")
         return (f"ok: đã chụp vùng {label} ({how}), ảnh ở lượt sau."
-                + (f" Chữ trong vùng:\n{text}" if text else " OCR không đọc được chữ nào."))
+                + (f" Chữ trong vùng (model đọc):\n{text}" if text
+                   else " Không đọc được chữ nào."))
 
     def _wanted_files(self) -> list[str]:
         """Comparable keys of the file names in this request and the recent ones
@@ -847,21 +826,14 @@ class TaskRunner(GroundingMixin):
         return keys
 
     async def _read_title(self, task_id: str) -> str | None:
-        """OCR of the title bar of the window in front, or None if unavailable."""
+        """Title bar of the window in front, read by the vision model; None if
+        unavailable."""
         screen_w, screen_h = self.relay.frame_sw, self.relay.frame_sh
-        if not (screen_w and OCR_ENABLE):
+        if not screen_w:
             return None
         x, y, w, h = fraction_box(ZOOM_AREAS["title"], screen_w, screen_h)
-        image, _scale, native = await self._capture_region(task_id, x, y, w, h)
-        if image is None:
-            return None
-        try:
-            items = await asyncio.get_running_loop().run_in_executor(
-                None, ocr.run_ocr, image if native else upscale(image), OCR_LANG)
-        except Exception as e:  # noqa: BLE001
-            log(f"[{task_id}] đọc thanh tiêu đề lỗi: {e}")
-            return None
-        return " ".join(it["text"] for it in items or []).strip()
+        text = await self._read_region(task_id, x, y, w, h, "thanh tiêu đề cửa sổ")
+        return " ".join((text or "").split()) or None
 
     @staticmethod
     def _related(item: dict, text: str, named: tuple) -> bool:
@@ -941,30 +913,15 @@ class TaskRunner(GroundingMixin):
         """Note what the page just captured says, appended to the screenshot's tool
         result (text is never pruned from the conversation, unlike screenshots), and
         tell whether reading has reached the end (twice in a row nothing new after
-        moving). See READ_NOTES."""
-        lines = None
-        if READ_NOTES in ("ocr", "both") and OCR_ENABLE:
-            items = await self._ocr_items(task_id)
-            if items:
-                lines = ocr_lines(items, limit=100000).split("\n")
-        if lines is not None:
-            fresh, nothing_new = reader.page(lines)
-            if nothing_new:
-                return self._end_note(task_id, reader)
-            if READ_NOTES == "ocr":
-                return self._note_block(OCR_NOTE_HEAD, fresh), False
-        if READ_NOTES == "ocr":
-            return "", False                     # OCR unavailable: nothing to note
+        moving). The vision model transcribes the page; its own lines decide what
+        is new."""
         transcript = await self._transcribe_page(task_id)
         if transcript is None:
             return "", False                     # the call failed: no verdict either
         page_lines = [line.strip() for line in transcript.split("\n") if line.strip()]
-        if lines is None:                        # no OCR: the model's text decides
-            fresh, nothing_new = reader.page(page_lines)
-            if nothing_new:
-                return self._end_note(task_id, reader)
-        else:
-            fresh, _ = self._note_dedupe.page(page_lines)
+        fresh, nothing_new = reader.page(page_lines)
+        if nothing_new:
+            return self._end_note(task_id, reader)
         return self._note_block(MODEL_NOTE_HEAD, fresh), False
 
     def _end_note(self, task_id: str, reader) -> tuple[str, bool]:
@@ -1041,7 +998,7 @@ class TaskRunner(GroundingMixin):
                 continue
             if message.get("role") != "tool":
                 continue
-            for head in (MODEL_NOTE_HEAD, OCR_NOTE_HEAD):
+            for head in (MODEL_NOTE_HEAD,):
                 marker = f"\n{head}:"
                 if marker in content:
                     base, note = content.split(marker, 1)
@@ -1089,21 +1046,27 @@ class TaskRunner(GroundingMixin):
         return not is_dangerous("type", {"text": flat})
 
     async def _top_search_result(self, task_id: str) -> str:
-        """Name of the first result under "Best match" in Windows Search, or ""."""
-        items = await self._ocr_items(task_id) if OCR_ENABLE else None
-        if not items:
+        """Name of the first result under "Best match" in Windows Search, read by
+        the vision model from the screenshot just taken, or ""."""
+        if not self._raw_frame:
             return ""
-        labels = [it for it in items
-                  if max(_sim(k, it["text"]) for k in SEARCH_TOP_LABELS) >= 0.8]
-        if not labels:
+        prompt = ("Ảnh là màn hình có bảng kết quả tìm kiếm của Windows. Chỉ trả về đúng TÊN "
+                  "của kết quả ĐẦU TIÊN trong mục 'Best match' / 'Kết quả phù hợp nhất', "
+                  "nguyên văn như trên ảnh, không kèm loại hay giải thích. Không có mục đó thì "
+                  "trả về đúng: KHÔNG CÓ /no_think")
+        try:
+            resp = await llm.chat(model=MODEL, think=False, options={"num_ctx": NUM_CTX},
+                                  messages=[{"role": "user", "content": prompt,
+                                             "images": [self._raw_frame]}])
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            log(f"[{task_id}] đọc kết quả tìm kiếm lỗi: {e}")
             return ""
-        label = min(labels, key=lambda it: it["cy"])
-        below = [it for it in items
-                 if 0 < it["cy"] - label["cy"] <= 70 and abs(it["x0"] - label["x0"]) <= 160
-                 and it is not label]
-        if not below:
-            return ""
-        return min(below, key=lambda it: it["cy"])["text"].strip(" '\"")
+        text = (resp["message"].get("content") or "").strip().splitlines()
+        top = text[0].strip(" '\"`*") if text else ""
+        log(f"[{task_id}] kết quả tìm kiếm đầu tiên (model đọc): {top!r}")
+        return "" if not top or "KHÔNG CÓ" in top.upper() else top
 
     async def _look_before_enter(self, task_id: str) -> str:
         """Enter right after typing into Windows Search opens whatever happens to

@@ -1,21 +1,21 @@
-"""READ_NOTES: the vision model transcribes each page it reads."""
+"""The vision model transcribes each page it reads into the conversation."""
 import asyncio
 
+import llm
 import runner
-from test_loops import PAGES, jpeg
-from test_runner import make_runner, ocr_box, reply, scripted_llm, tool_call
+from test_loops import jpeg
+from test_runner import make_runner, reply, scripted_llm, tool_call
 
 
-def reading_run(monkeypatch, mode, transcripts, ocr_pages=PAGES, max_chars=None):
-    """Read len(ocr_pages) screens. transcripts[i] is what the model copies from
+def reading_run(monkeypatch, transcripts, max_chars=None):
+    """Read len(transcripts) screens. transcripts[i] is what the model copies from
     screen i (None = the call fails)."""
     async def go():
         tr = make_runner(monkeypatch)
-        monkeypatch.setattr(runner, "READ_NOTES", mode)
         if max_chars:
             monkeypatch.setattr(runner, "NOTES_MAX_CHARS", max_chars)
         current = {"page": -1}
-        pages = iter(range(len(ocr_pages)))
+        pages = iter(range(len(transcripts)))
         copied = []
 
         async def fake_shot(task_id, *, force=False, attach=True):
@@ -24,12 +24,6 @@ def reading_run(monkeypatch, mode, transcripts, ocr_pages=PAGES, max_chars=None)
             tr._frame_hash = str(current["page"])
             return "ok: đã chụp"
         tr._screenshot = fake_shot
-
-        async def fake_ocr(task_id):
-            if mode == "model":
-                return None
-            return [ocr_box(t, 100, 20 + 40 * i) for i, t in enumerate(ocr_pages[current["page"]])]
-        tr._ocr_items = fake_ocr
 
         async def fake_transcribe(task_id):
             copied.append(current["page"])
@@ -41,7 +35,7 @@ def reading_run(monkeypatch, mode, transcripts, ocr_pages=PAGES, max_chars=None)
         tr._summarize_notes = fake_summary
 
         replies = [reply(calls=[tool_call("screenshot")])]
-        for _ in range(len(ocr_pages) - 1):
+        for _ in range(len(transcripts) - 1):
             replies += [reply(calls=[tool_call("scroll", amount=-8)]),
                         reply(calls=[tool_call("screenshot")])]
         replies.append(reply("Tóm tắt xong"))
@@ -52,53 +46,37 @@ def reading_run(monkeypatch, mode, transcripts, ocr_pages=PAGES, max_chars=None)
     return asyncio.run(go())
 
 
-MODEL_TEXT = ["1. Tên dự án: Bo mạch máy bán hàng tự động",
-              "2. Khách hàng: ngành bán lẻ\n3. Tiến độ: 6 tháng",
-              "8. Khó khăn lớn nhất: nhiễu nguồn",
-              "", ""]
+PAGES = ["1. Tên dự án: Bo mạch máy bán hàng tự động",
+         "2. Khách hàng: ngành bán lẻ\n3. Tiến độ: 6 tháng",
+         "8. Khó khăn lớn nhất: nhiễu nguồn",
+         "8. Khó khăn lớn nhất: nhiễu nguồn",
+         "8. Khó khăn lớn nhất: nhiễu nguồn"]
 
 
-def test_both_mode_keeps_the_model_transcript_not_ocr(monkeypatch):
-    tr, seen, copied, text = reading_run(monkeypatch, "both", MODEL_TEXT)
-    assert "Ghi chú trang này (model chép lại)" in text
-    assert "3. Tiến độ: 6 tháng" in text and "nhiễu nguồn" in text
-    assert "Chữ MỚI trên trang này" not in text
-    assert copied == [0, 1, 2]              # pages OCR saw as nothing new are not copied
+def test_pages_are_noted_and_the_end_forces_an_answer(monkeypatch):
+    tr, seen, copied, text = reading_run(monkeypatch, PAGES)
+    assert copied == [0, 1, 2, 3, 4]
+    assert "Ghi chú trang này (model chép lại)" in text and "3. Tiến độ: 6 tháng" in text
+    assert text.count("nhiễu nguồn") == 1      # a repeated page is not noted twice
     assert seen[-1]["tools"] is None and tr.relay.final()[-1]["result"] == "Tóm tắt xong"
 
 
-def test_model_mode_decides_the_end_from_its_own_text(monkeypatch):
-    transcripts = MODEL_TEXT[:3] + [MODEL_TEXT[2], MODEL_TEXT[2]]   # same page again
-    tr, seen, copied, text = reading_run(monkeypatch, "model", transcripts)
-    assert copied == [0, 1, 2, 3, 4]
-    assert text.count("nhiễu nguồn") == 1    # repeated page not noted twice
-    assert seen[-1]["tools"] is None
-
-
 def test_a_failed_transcription_is_no_verdict(monkeypatch):
-    transcripts = [MODEL_TEXT[0], None, None, None, None]
-    tr, seen, _, _ = reading_run(monkeypatch, "model", transcripts)
+    tr, seen, _, _ = reading_run(monkeypatch, [PAGES[0], None, None, None, None])
     assert all(call["tools"] is not None for call in seen)   # never forced to stop
     assert tr.relay.final()[-1]["result"] == "Tóm tắt xong"
 
 
 def test_long_notes_are_condensed(monkeypatch):
-    tr, seen, _, text = reading_run(monkeypatch, "both", MODEL_TEXT, max_chars=60)
+    _, _, _, text = reading_run(monkeypatch, PAGES, max_chars=60)
     assert "Ghi chú tổng hợp các trang đã đọc" in text
     assert "đã gộp vào 'Ghi chú tổng hợp'" in text
     assert text.count("Ghi chú tổng hợp các trang đã đọc") == 1   # older summary folded in
 
 
-def test_ocr_mode_unchanged(monkeypatch):
-    _, _, copied, text = reading_run(monkeypatch, "ocr", MODEL_TEXT)
-    assert copied == [] and "Chữ MỚI trên trang này" in text
-
-
 def test_transcribe_sends_the_clean_page_and_the_recent_notes(monkeypatch):
-    import llm
-
     async def go():
-        tr = make_runner(monkeypatch)
+        tr = runner.TaskRunner(make_runner(monkeypatch).relay)
         tr._raw_frame = b"page-bytes"
         tr._notes_recent = ["2. Khách hàng: ngành bán lẻ"]
         calls = []

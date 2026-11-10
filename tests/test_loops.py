@@ -5,11 +5,10 @@ import io
 
 from PIL import Image
 
-import ocr
 import runner
 from progress import ReadingTracker
 from test_region import region_runner
-from test_runner import make_runner, ocr_box, reply, scripted_llm, tool_call
+from test_runner import make_runner, reply, scripted_llm, tool_call
 
 FILE = "Ho-so-du-an-bo-mach-may-ban-hang-tu-dong"
 REQUEST = f"Mở tài liệu {FILE} và tóm tắt cho tôi"
@@ -18,7 +17,7 @@ REQUEST = f"Mở tài liệu {FILE} và tóm tắt cho tôi"
 # --- 1. do not open an open file again -------------------------------------------
 
 def open_runner(monkeypatch, title):
-    tr = region_runner(monkeypatch, ocr_items=[ocr_box(title, 600, 20)])
+    tr = region_runner(monkeypatch, text=title)
     tr._task_text = REQUEST
     tr._task_groups = ("word",)
     return tr
@@ -113,9 +112,9 @@ def test_reading_to_the_end_forces_an_answer(monkeypatch):
             return "ok: đã chụp"
         tr._screenshot = fake_shot
 
-        async def fake_ocr(task_id):
-            return [ocr_box(text, 100, 20 + 40 * i) for i, text in enumerate(PAGES[current["page"]])]
-        tr._ocr_items = fake_ocr
+        async def fake_transcribe(task_id):
+            return "\n".join(PAGES[current["page"]])
+        tr._transcribe_page = fake_transcribe
         replies = [reply(calls=[tool_call("screenshot")])]
         for _ in range(len(PAGES) - 1):
             replies += [reply(calls=[tool_call("scroll", amount=-8)]),
@@ -138,10 +137,10 @@ def test_reading_note_is_skipped_for_non_reading_tasks(monkeypatch):
         tr = make_runner(monkeypatch)
         called = []
 
-        async def fake_ocr(task_id):
+        async def fake_transcribe(task_id):
             called.append(1)
-            return []
-        tr._ocr_items = fake_ocr
+            return ""
+        tr._transcribe_page = fake_transcribe
 
         async def fake_shot(task_id, *, force=False, attach=True):
             tr._raw_frame = jpeg(10)
@@ -151,10 +150,6 @@ def test_reading_note_is_skipped_for_non_reading_tasks(monkeypatch):
         await tr.run_task("t", "mở notepad")
         assert called == []
     asyncio.run(go())
-
-
-def test_ocr_module_untouched():
-    assert callable(ocr.run_ocr)
 
 
 def test_a_stray_line_on_a_full_page_is_still_nothing_new():

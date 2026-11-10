@@ -51,8 +51,8 @@ TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "tap",
             "description": ("Click vào một phần tử mô tả bằng lời (vd 'ô nhập tin nhắn "
-                           "Messenger', 'nút Gửi', 'liên hệ Trường'). Hệ thống tìm chữ trên "
-                           "màn hình (OCR) theo keywords để định vị chính xác. ƯU TIÊN dùng "
+                           "Messenger', 'nút Gửi', 'liên hệ Trường'). Model định vị UI-TARS "
+                           "tìm phần tử theo mô tả, chữ trên nó và vị trí. ƯU TIÊN dùng "
                            "tap thay cho click toạ độ khi cần bấm vào phần tử trên màn hình. "
                            "Điền keywords là các chữ NHÌN THẤY trên/ngay cạnh phần tử; phần "
                            "tử không có chữ thì để trống và mô tả rõ trong target."),
@@ -87,17 +87,6 @@ TOOLS: list[dict[str, Any]] = [
                                         "right_of; bottom_of = phần dưới cùng của khung nằm "
                                         "dưới anchor (vd ô nhập ở đáy khung chat); on = bấm "
                                         "chính anchor; near = quanh anchor."),
-                    },
-                    "control": {
-                        "type": "string",
-                        "enum": ["any", "edit", "button", "link", "listitem", "menuitem",
-                                 "tab", "checkbox", "radio", "combobox"],
-                        "description": ("LOẠI control (UI Automation) nếu biết, giúp bấm chính "
-                                        "xác tuyệt đối không cần nhìn ảnh: edit = ô nhập text, "
-                                        "button = nút, link = liên kết, listitem = mục danh "
-                                        "sách. Hữu ích khi tên động/không rõ: vd ô nhập tin "
-                                        "nhắn là 'edit' ở area 'right' — có thể bỏ keywords. "
-                                        "Mặc định any (tìm theo keywords)."),
                     },
                 },
                 "required": ["target"],
