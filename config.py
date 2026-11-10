@@ -99,7 +99,7 @@ OCR_MATCH_MIN = float(os.environ.get("OCR_MATCH_MIN", "0.8"))
 # A VERY confident OCR keyword match (>= this) is clicked directly (before UI-TARS
 # when UITARS_BEFORE_OCR=false). A text-labelled target ("Aa", "Gửi") is read more precisely by OCR than
 # a VLM points at it, so OCR wins first; UI-TARS handles the text-less/icon cases.
-OCR_EXACT_MIN = float(os.environ.get("OCR_EXACT_MIN", "0.9"))
+OCR_EXACT_MIN = float(os.environ.get("OCR_EXACT_MIN", "0.8"))
 
 # qwen3-vl is a "thinking" model: left on, it burns the whole generation on a
 # reasoning monologue and never emits the tool call (blank turns, 80s/step).
