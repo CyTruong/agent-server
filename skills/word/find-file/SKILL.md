@@ -4,9 +4,8 @@ Cách DUY NHẤT để mở file Word. Có đường dẫn thì chỉ lấy tên
 file); không tự đặt đường dẫn.
 
 ## Quy trình
-1. `hotkey win+s` → `type <tên file>` (chỉ phần tên, không đuôi .docx, không dấu
-   nháy) → `screenshot`. KHÔNG nhấn Enter trước khi nhìn kết quả. Kết quả chưa hiện
-   thì chụp thêm một lần.
+1. `hotkey win+s` → `type <tên file>` (KHÔNG gõ "Word": tìm thẳng tên file, không đuôi)
+   → `screenshot`. KHÔNG nhấn Enter trước khi nhìn kết quả.
 2. `zoom` box quanh danh sách kết quả (theo lưới) để đọc rõ tên. Đọc các dòng là **file
    Word**: icon Word, dòng phụ "Word · Last modified ..." (bản
    tiếng Việt: "Word · Sửa đổi lần cuối ..."). Bỏ qua thư mục (Folders), file Excel/PDF

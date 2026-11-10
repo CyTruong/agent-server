@@ -39,8 +39,10 @@ ENTER = reply(calls=[{"function": {"name": "key", "arguments": {"name": "enter"}
 
 def test_enter_before_looking_is_replaced_by_a_screenshot(monkeypatch):
     tr, seen, shots = search_run(monkeypatch, [ENTER, ENTER])
-    sent = [call[0] for call in tr.relay.calls]
-    assert sent == ["hotkey", "type", "key"]          # only the second Enter went out
+    # esc + win+s, ctrl+a + type, then only the second Enter went out
+    assert tr.relay.calls == [("key", {"name": "esc"}), ("hotkey", {"combo": "win+s"}),
+                              ("hotkey", {"combo": "ctrl+a"}), ("type", {"text": "Ho-so"}),
+                              ("key", {"name": "enter"})]
     tools = [m for m in seen[-1]["messages"] if isinstance(m, dict) and m.get("role") == "tool"]
     assert "CHƯA nhấn Enter" in tools[2]["content"]
     assert any(isinstance(m, dict) and m.get("images") == [b"results"] for m in seen[-1]["messages"])
@@ -49,7 +51,8 @@ def test_enter_before_looking_is_replaced_by_a_screenshot(monkeypatch):
 def test_enter_after_a_screenshot_goes_through(monkeypatch):
     shot = reply(calls=[tool_call("screenshot")])
     tr, _, _ = search_run(monkeypatch, [shot, ENTER])
-    assert [call[0] for call in tr.relay.calls] == ["hotkey", "type", "key"]
+    assert [call[0] for call in tr.relay.calls][-1] == "key"
+    assert ("key", {"name": "enter"}) in tr.relay.calls
 
 
 # C: no cache after getting stuck ----------------------------------------------------

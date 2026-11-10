@@ -6,7 +6,7 @@ Word CHỈ được mở file bằng Windows Search (skill tìm và mở file). 
 ## Quy trình
 1. `screenshot` TRƯỚC TIÊN, rồi `zoom` area "title" đọc tên file trên thanh tiêu đề.
    Đúng tên → xong, KHÔNG mở lại (ngữ cảnh nói đã mở thì vẫn phải đọc được tên).
-2. Mở bằng skill **tìm và mở file bằng Windows Search** (`win+s`):
+2. Mở bằng skill **tìm và mở file bằng Windows Search** (`win+s`), không mở Word trước:
    - Người dùng chỉ nói tên → tìm theo tên đó.
    - Người dùng đưa đường dẫn đầy đủ → chỉ lấy TÊN file (phần sau dấu `\` cuối, bỏ
      `.docx`) để tìm; thư mục trong đường dẫn dùng để chọn đúng file khi có nhiều kết quả.

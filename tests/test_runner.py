@@ -37,6 +37,7 @@ def make_runner(monkeypatch, relay=None):
     monkeypatch.setattr(runner, "CACHE_ENABLED", False)
     monkeypatch.setattr(runner, "PLAN_ENABLE", False)
     monkeypatch.setattr(runner, "FIRST_LOOK", False)   # FakeRelay cannot take shots
+    monkeypatch.setattr(runner, "AUTO_READ_PAGES", 0)  # tests that cover it turn it on
     tr = runner.TaskRunner(relay or FakeRelay())
 
     # Reading the screen goes through the vision model, which would spend the

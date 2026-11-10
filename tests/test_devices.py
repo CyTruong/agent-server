@@ -105,6 +105,7 @@ def manager(monkeypatch, ui_logs=False):
     monkeypatch.setattr(runner, "CACHE_ENABLED", False)
     monkeypatch.setattr(runner, "PLAN_ENABLE", False)
     monkeypatch.setattr(runner, "FIRST_LOOK", False)   # Hub never delivers frames
+    monkeypatch.setattr(runner, "AUTO_READ_PAGES", 0)
     hub = Hub()
     return hub, sessions.SessionManager(hub)
 

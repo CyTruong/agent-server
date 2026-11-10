@@ -99,6 +99,9 @@ NOTES_MAX_CHARS = int(os.environ.get("NOTES_MAX_CHARS", "6000"))
 # screen starts, so earlier context or cached workflows are checked against what
 # is really in front instead of being trusted.
 FIRST_LOOK = os.environ.get("FIRST_LOOK", "true").lower() in ("1", "true", "yes")
+# When the model wants to answer about a Word document it has not read to the
+# end, the agent reads it itself from the top: at most this many screens.
+AUTO_READ_PAGES = int(os.environ.get("AUTO_READ_PAGES", "15"))
 SCREEN_CACHE_TTL = float(os.environ.get("SCREEN_CACHE_TTL_SECONDS", "6.0"))
 SCREEN_MUTATING_TOOLS = frozenset({
     "move",

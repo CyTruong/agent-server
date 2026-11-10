@@ -13,6 +13,7 @@ import llm
 import web_search
 from agent_log import clip, dump_messages, log
 from config import (
+    AUTO_READ_PAGES,
     CACHE_DB,
     CACHE_ENABLED,
     CACHE_MAX_AGE_DAYS,
@@ -64,6 +65,9 @@ REFERENCE_WORDS = ("trên", "đó", "này", "vừa", "vừa rồi", "lúc nãy",
 # Window title words showing each app is in front (compared without accents/spaces).
 APP_TITLE_HINTS = {"zalo": ("zalo",), "facebook": ("facebook", "messenger"),
                    "word": ("word",)}
+# Typed into Windows Search, these open the Word app instead of the file.
+APP_QUERIES = frozenset({"word", "microsoftword", "msword", "winword", "microsoftofficeword",
+                         "word2016", "word2019", "word2021", "office"})
 APP_LABELS = {"zalo": "Zalo", "facebook": "Facebook", "word": "Microsoft Word"}
 
 def _same_name(query: str, shown: str) -> bool:
@@ -353,6 +357,8 @@ class TaskRunner(GroundingMixin):
         self._notes_chars, self._notes_recent = 0, []
         self._note_dedupe = ReadingTracker()
         force_answer = False
+        # A Word summary/answer needs the whole document; see _auto_read.
+        auto_read_pending = bool(reader) and "word/read-file" in skill_names and AUTO_READ_PAGES > 0
         needs_deliver = _needs_delivery(text) and await self._requires_delivery(task_id, text)
 
         # Plan-and-execute: decompose a multi-step request first, keep it as a
@@ -434,6 +440,15 @@ class TaskRunner(GroundingMixin):
                             "thì DỪNG và hỏi lại, không gửi đại." + NT})
                         continue
                     result = content or f"(suy nghĩ) {think}"
+                    if auto_read_pending and not reader.reached_end:
+                        auto_read_pending = False
+                        if await self._auto_read(task_id, messages, reader):
+                            force_answer = True
+                            messages.append({"role": "user", "content":
+                                "Bỏ câu trả lời vừa rồi: nó chưa dựa trên TOÀN BỘ tài liệu. Viết "
+                                "lại câu trả lời cuối dựa trên ghi chú tất cả các trang ở trên, "
+                                "theo đúng thứ tự từ đầu tới cuối." + NT})
+                            continue
                     # Sent but never looked: check the screen before reporting. Not
                     # gated on _is_ask_or_blocked: a success report that quotes the
                     # message can contain "?".
@@ -570,10 +585,30 @@ class TaskRunner(GroundingMixin):
             if opened:
                 return (f"error: KHÔNG mở lại: thanh tiêu đề đang là '{opened}', file cần dùng ĐÃ MỞ. "
                         "Làm tiếp việc đọc/sửa ngay trên cửa sổ này.")
+            # win+s toggles: if a search panel is already open it would close it and
+            # the next typing would land in the document. Close it first.
+            try:
+                await self.relay.call_device("key", {"name": "esc"}, task_id,
+                                             timeout=DEVICE_TIMEOUT)
+            except Exception as e:  # noqa: BLE001
+                log(f"[{task_id}] esc trước win+s lỗi: {e}")
             self._search_open = True
             self._search_query = ""
+        search_note = ""
         if name == "type" and self._search_open:
-            self._search_query = str(args.get("text") or "")
+            typed = str(args.get("text") or "")
+            query = self._search_text(typed)
+            if _file_key(query) != _file_key(typed):
+                search_note = f" (gõ '{query}' thay cho '{typed}')"
+                log(f"[{task_id}] ô tìm Windows: '{typed}' -> '{query}'")
+            args = dict(args, text=query)
+            self._search_query = query
+            # Replace whatever an earlier search left in the box.
+            try:
+                await self.relay.call_device("hotkey", {"combo": "ctrl+a"}, task_id,
+                                             timeout=DEVICE_TIMEOUT)
+            except Exception as e:  # noqa: BLE001
+                log(f"[{task_id}] ctrl+a trong ô tìm lỗi: {e}")
         if (name == "key" and self._search_open
                 and str(args.get("name", "")).lower() == "enter"):
             return await self._look_before_enter(task_id)
@@ -623,7 +658,7 @@ class TaskRunner(GroundingMixin):
                 return "error: người dùng từ chối hành động nguy hiểm"
 
         if name == "type" and isinstance(args.get("text"), str):
-            return await self._type_text(task_id, args["text"])
+            return await self._type_text(task_id, args["text"]) + search_note
 
         # Exactly one attempt: after a timeout the action may still have run, and
         # repeating it would type or send the message twice.
@@ -811,19 +846,35 @@ class TaskRunner(GroundingMixin):
                 + (f" Chữ trong vùng (model đọc):\n{text}" if text
                    else " Không đọc được chữ nào."))
 
-    def _wanted_files(self) -> list[str]:
-        """Comparable keys of the file names in this request and the recent ones
-        ("Ho-so-du-an.docx" -> "hosoduan"): names with - or _ or a Word extension."""
+    def _wanted_file_names(self) -> list[str]:
+        """File names in this request and the recent ones, as written and without
+        the extension: tokens with - or _ or a Word extension."""
         texts = [self._task_text] + [h["request"] for h in self._recent_history()]
-        keys = []
+        names, keys = [], set()
         for text in texts:
             for token in re.findall(r"[\w.\-]{6,}", text or ""):
                 low = token.lower()
                 if "-" in low or "_" in low or low.endswith((".docx", ".doc")):
-                    key = _file_key(re.sub(r"\.docx?$", "", low))
+                    name = re.sub(r"\.docx?$", "", token, flags=re.IGNORECASE).strip(".-_")
+                    key = _file_key(name)
                     if len(key) >= 6 and key not in keys:
-                        keys.append(key)
-        return keys
+                        keys.add(key)
+                        names.append(name)
+        return names
+
+    def _wanted_files(self) -> list[str]:
+        """Comparable keys of _wanted_file_names ("Ho-so-du-an.docx" -> "hosoduan")."""
+        return [_file_key(name) for name in self._wanted_file_names()]
+
+    def _search_text(self, typed: str) -> str:
+        """What to type into Windows Search. A Word task that knows its file
+        searches the file itself, not the app ("Microsoft Word" only opens an
+        empty Word); extensions are dropped (Search matches the name better)."""
+        text = typed.strip()
+        names = self._wanted_file_names() if "word" in self._task_groups else []
+        if names and _file_key(text) in APP_QUERIES:
+            text = names[0]
+        return re.sub(r"\.(docx?|xlsx?|pptx?|pdf)$", "", text, flags=re.IGNORECASE).strip()
 
     async def _read_title(self, task_id: str) -> str | None:
         """Title bar of the window in front, read by the vision model; None if
@@ -924,6 +975,57 @@ class TaskRunner(GroundingMixin):
             return self._end_note(task_id, reader)
         return self._note_block(MODEL_NOTE_HEAD, fresh), False
 
+    async def _auto_read(self, task_id: str, messages: list, reader) -> bool:
+        """The model wanted to answer before the document was read to its end
+        (it summarised the screen it happened to see). Read it here instead, from
+        the top, one screen at a time, until a scroll shows nothing new. Adds the
+        page notes to the conversation; False if nothing could be read."""
+        log(f"[{task_id}] model trả lời khi chưa đọc hết tài liệu -> tự đọc từ đầu")
+        screen_w, screen_h = self.relay.frame_sw, self.relay.frame_sh
+        prepare = [("key", {"name": "esc"}), ("hotkey", {"combo": "ctrl+home"})]
+        if screen_w:   # the wheel scrolls whatever is under the cursor
+            prepare.append(("move", {"x": screen_w // 2, "y": screen_h // 2}))
+        for tool, args in prepare:
+            try:
+                await self.relay.call_device(tool, args, task_id, timeout=DEVICE_TIMEOUT)
+            except Exception as e:  # noqa: BLE001
+                log(f"[{task_id}] tự đọc: {tool} lỗi ({e}) -> bỏ")
+                return False
+        self._invalidate_screen_cache()
+        notes = []
+        for page in range(AUTO_READ_PAGES):
+            if page:
+                try:
+                    await self.relay.call_device("scroll", {"amount": -8}, task_id,
+                                                 timeout=DEVICE_TIMEOUT)
+                except Exception as e:  # noqa: BLE001
+                    log(f"[{task_id}] tự đọc: cuộn lỗi ({e})")
+                    break
+                self._invalidate_screen_cache()
+            reader.action("scroll" if page else "hotkey")
+            await self._screenshot(task_id, force=True, attach=False)
+            if not self._raw_frame:
+                break
+            note, done = await self._reading_note(task_id, reader)
+            marker = f"\n{MODEL_NOTE_HEAD}:"
+            if marker in note:
+                notes.append(note.split(marker, 1)[1].strip())
+            if done or reader.stale >= 2:
+                break
+        log(f"[{task_id}] tự đọc xong: {len(notes)} trang có nội dung mới")
+        if not notes:
+            return False
+        text = "\n".join(notes)
+        if len(text) > NOTES_MAX_CHARS:
+            try:
+                text = await self._summarize_notes(text) or text
+            except Exception as e:  # noqa: BLE001
+                log(f"[{task_id}] tóm gọn ghi chú lỗi: {e}")
+        messages.append({"role": "user", "content":
+            "Hệ thống đã TỰ đọc tài liệu từ ĐẦU tới CUỐI (về đầu bằng ctrl+home rồi cuộn "
+            f"từng trang). Ghi chú các trang theo thứ tự:\n{text}" + NT})
+        return True
+
     def _end_note(self, task_id: str, reader) -> tuple[str, bool]:
         log(f"[{task_id}] trang không có chữ mới ({reader.stale})")
         return (" KHÔNG có chữ mới so với các trang đã đọc: đã tới CUỐI (hoặc cuộn không tác "
@@ -950,8 +1052,9 @@ class TaskRunner(GroundingMixin):
             "Ảnh là màn hình đang mở một tài liệu hoặc cuộc trò chuyện. Chép lại NGUYÊN VĂN "
             "phần nội dung chính theo đúng thứ tự từ trên xuống: giữ tiêu đề mục, số thứ tự, "
             "số liệu, tên riêng, đúng dấu tiếng Việt; mỗi đoạn một dòng. Bỏ menu, thanh "
-            "công cụ, thanh tiêu đề. Tin nhắn: ghi 'Họ:' cho bong bóng bên trái, 'Mình:' cho "
-            "bên phải. Không thêm lời bình, không tóm tắt."
+            "công cụ, thanh tiêu đề. Không thêm lời bình, không tóm tắt."
+            + (" Tin nhắn: ghi 'Họ:' cho bong bóng bên trái, 'Mình:' cho bên phải."
+               if {"zalo", "facebook"} & set(self._task_groups) else "")
             + (f"\nBỎ QUA các dòng đã chép trước đó (cuối ghi chú):\n{tail}" if tail else "")
             + "\nNếu không có gì mới, chỉ trả về: KHÔNG CÓ NỘI DUNG MỚI /no_think")
         t0 = time.monotonic()

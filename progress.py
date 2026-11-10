@@ -65,6 +65,7 @@ class ReadingTracker:
         self._seen: list[str] = []
         self._moved = False
         self.stale = 0          # consecutive moves that showed no new text
+        self.reached_end = False   # a move showed nothing new at least once
 
     def action(self, tool: str) -> None:
         if tool in self.MOVES:
@@ -90,6 +91,8 @@ class ReadingTracker:
         # two (a page number, a misread line) out of ten or more.
         nothing_new = self._moved and (
             not fresh or (len(lines) >= 10 and len(fresh) <= len(lines) // 10))
+        if nothing_new:
+            self.reached_end = True
         if self._moved:
             self.stale = self.stale + 1 if nothing_new else 0
         self._moved = False
