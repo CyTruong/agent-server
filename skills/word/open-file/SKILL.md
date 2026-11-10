@@ -5,7 +5,7 @@
 2. Chỉ có tên file → làm theo skill **tìm và mở file bằng Windows Search** (`win+s`).
 3. Có đường dẫn đầy đủ:
    - Đang có Word: `hotkey ctrl+f12` → `type <đường dẫn>` → `key enter`.
-   - Chưa có Word: `hotkey win+r` (cần xác nhận) → `type <đường dẫn>` → `key enter`.
+   - Chưa có Word: `hotkey win+r` → `type <đường dẫn>` → `key enter`.
 4. `screenshot` xác minh thanh tiêu đề ghi đúng tên file. Word mở chậm thì chụp lại
    tối đa 2 lần.
 5. Cần sửa mà thấy dải "Protected View": bấm "Cho phép Chỉnh sửa / Enable Editing".

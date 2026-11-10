@@ -8,7 +8,7 @@
    - Nhiều kết quả giống nhau → `ask_user`, mỗi kết quả một lựa chọn (tên + loại hoặc
      thư mục), rồi mở mục được chọn.
    - Không có kết quả phù hợp → `ask_user` hỏi tên hoặc đường dẫn khác.
-3. Có đường dẫn đầy đủ: `hotkey win+r` (cần xác nhận) → `type <đường dẫn>` → `key enter`.
+3. Có đường dẫn đầy đủ: `hotkey win+r` → `type <đường dẫn>` → `key enter`.
 4. `screenshot` xác minh đã mở đúng.
 
 ## Quy tắc

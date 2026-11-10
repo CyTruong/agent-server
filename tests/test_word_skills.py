@@ -4,11 +4,12 @@ import re
 import pytest
 
 import skill_select
-from tools import SAFE_HOTKEYS, is_dangerous
+from tools import is_dangerous
 
 ALL = {"overview", "open-file", "find-file", "close-file", "read-file", "create-file", "edit-file"}
-# Deliberately left needing the user's confirmation.
-CONFIRMED_HOTKEYS = {"win+e", "win+r", "alt+f4"}
+# Keys the PC agent (Resolve-KeyToken) can press as the last key of a combo.
+_LAST_KEY = r"([a-z0-9]|f([1-9]|1[0-2])|enter|tab|esc|home|end|up|down|left|right)"
+_COMBO = re.compile(rf"((ctrl|alt|shift|win)\+)*{_LAST_KEY}")
 
 
 def word_skills(text):
@@ -61,9 +62,9 @@ def test_prompt_with_every_action_stays_manageable():
 def test_hotkeys_named_in_word_skills_are_known():
     text = "\n".join(v for k, v in skill_select.ALL_SKILLS.items() if k.startswith("word/"))
     combos = set(re.findall(r"`(?:hotkey )?((?:ctrl|alt|win|shift)\+[a-z0-9+]+|f\d+)", text))
-    assert combos and combos <= (SAFE_HOTKEYS | CONFIRMED_HOTKEYS), combos - SAFE_HOTKEYS
+    assert combos and all(_COMBO.fullmatch(c) for c in combos), combos
 
 
-def test_word_shortcuts_run_without_confirmation():
-    for combo in ("ctrl+f12", "f12", "ctrl+h", "ctrl+alt+1"):
+def test_hotkeys_run_without_confirmation():
+    for combo in ("ctrl+f12", "f12", "ctrl+h", "ctrl+alt+1", "win+r", "win+e", "alt+f4"):
         assert not is_dangerous("hotkey", {"combo": combo})

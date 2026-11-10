@@ -91,7 +91,6 @@ def test_uncertain_name_offers_each_candidate_and_clicks_the_choice(monkeypatch)
 
 def test_windows_search_runs_without_confirmation():
     assert not is_dangerous("hotkey", {"combo": "win+s"})
-    assert is_dangerous("hotkey", {"combo": "win+r"})
 
 
 @pytest.mark.parametrize("keyword,target", [

@@ -226,22 +226,12 @@ TOOLS: list[dict[str, Any]] = [
 
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 
-# Allowlists: anything not listed here needs the user's confirmation. New
-# shortcuts are therefore safe by default until someone adds them.
+# Single keys outside this list need the user's confirmation. Hotkeys never do
+# (the user's choice, for full automation): what a shortcut opens, such as the Run
+# box, is harmless until text is typed into it, and `type` is still checked.
 SAFE_KEYS = frozenset({
     "enter", "tab", "esc", "escape", "backspace", "delete", "del", "space",
     "up", "down", "left", "right", "home", "end",
-})
-SAFE_HOTKEYS = frozenset({
-    "ctrl+a", "ctrl+c", "ctrl+v", "ctrl+x", "ctrl+z", "ctrl+y", "ctrl+s", "ctrl+f",
-    "ctrl+t", "ctrl+w", "ctrl+l", "ctrl+r", "ctrl+n", "ctrl+tab", "ctrl+shift+tab",
-    "ctrl+shift+t", "ctrl+enter", "ctrl+home", "ctrl+end", "shift+enter", "shift+tab",
-    "alt+tab", "alt+left", "alt+right", "f5",
-    # Windows Search: only opens the search box; typed text is checked by `type`.
-    "win+s",
-    # Microsoft Word: open/save-as dialogs, replace, formatting, heading styles.
-    "ctrl+f12", "f12", "ctrl+h", "ctrl+b", "ctrl+i", "ctrl+u",
-    "ctrl+alt+1", "ctrl+alt+2", "ctrl+alt+3",
 })
 
 # Free text cannot be allowlisted (it is what gets sent to people), so `type` is
@@ -307,8 +297,6 @@ def _first_command_word(text: str) -> str:
 def is_dangerous(tool: str, args: dict) -> bool:
     if tool == "key":
         return str(args.get("name", "")).lower() not in SAFE_KEYS
-    if tool == "hotkey":
-        return str(args.get("combo", "")).lower().replace(" ", "") not in SAFE_HOTKEYS
     if tool == "type":
         text = str(args.get("text", ""))
         return ("\n" in text or "\r" in text
