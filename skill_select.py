@@ -127,7 +127,9 @@ SKILL_KEYWORDS = {
     "word/open-file":   None,
     # Opening by name goes through Windows Search, so this is needed for most opens.
     "word/find-file":   None,
-    "word/close-file":  ["đóng", "tắt", "thoát", "close"],
+    # Not a bare "tắt": it is also the second word of "tóm tắt" (summarise).
+    "word/close-file":  ["đóng", "thoát", "close", "tắt file", "tắt word", "tắt tài liệu",
+                         "tắt văn bản", "tắt đi"],
     "word/read-file":   ["đọc", "xem", "tóm tắt", "nội dung", "có gì", "kiểm tra", "nói về"],
     "word/create-file": ["tạo", "soạn", "viết", "mới", "new"],
     "word/edit-file":   ["sửa", "chỉnh", "thêm", "xoá", "xóa", "thay", "đổi", "định dạng",
@@ -168,9 +170,14 @@ def _hit(keyword: str, low: str, folded: str) -> bool:
     phrase ("bồ sung" for "bổ sung"), or any keyword when the whole request was
     typed without accents ("sua file word"). Single accented syllables are not
     folded otherwise, because many differ only by tone ("điền" vs "diện")."""
-    if keyword in low:
+    single = " " not in keyword.strip()
+    if single:
+        # Whole words: "tắt" (close) must not fire inside "tóm tắt" (summarise).
+        if re.search(rf"(?<!\w){re.escape(keyword)}(?!\w)", low):
+            return True
+    elif keyword in low:
         return True
-    if " " not in keyword.strip() and low != folded:
+    if single and low != folded:
         return False
     return re.search(rf"(?<!\w){re.escape(_fold(keyword))}(?!\w)", folded) is not None
 

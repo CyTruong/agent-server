@@ -28,6 +28,10 @@ def _sim(keyword: str, text: str) -> float:
         return min(1.0, 0.85 + 0.15 * len(k) / len(t))
     if len(t) >= 3 and t in k:            # box holds part of the keyword
         return 0.7 * len(t) / len(k)
+    if len(k) <= 4:
+        # Too short to match approximately: "doc" ("Dọc") vs the word "do" scores
+        # 0.8 and once clicked body text "Tốc độ giao dịch" instead of a button.
+        return 0.0
     best = SequenceMatcher(None, k, t).ratio()
     for w in t.split():                   # keyword vs each word in the box
         best = max(best, SequenceMatcher(None, k, w).ratio())

@@ -313,7 +313,11 @@ class GroundingMixin:
         use_area = area if area and area != "any" else ""
         scored = [(max((_sim(k, it["text"]) for k in kws), default=0.0), it) for it in items]
         if use_area:
-            scored = [x for x in scored if _in_area(x[1], use_area, W, H)] or scored
+            in_area = [x for x in scored if _in_area(x[1], use_area, W, H)]
+            # Ribbons, title bars and toolbars really are at the top: the same word
+            # elsewhere is page content, not the control. Other areas are guesses
+            # the model often gets wrong, so they only rank.
+            scored = in_area if (in_area or use_area == "top") else scored
         scored.sort(key=lambda x: x[0], reverse=True)
         log(f"[{task_id}] OCR match: {len(items)} vùng {'trong vùng tìm' if region else 'toàn màn'}, "
             f"keywords={kws}; top: "

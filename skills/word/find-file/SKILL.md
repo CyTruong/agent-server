@@ -1,6 +1,7 @@
 # [Word] Tìm và mở file bằng Windows Search
 
-Dùng khi chỉ biết tên (hoặc một phần tên) file. Có đường dẫn đầy đủ thì xem skill mở file.
+Cách DUY NHẤT để mở file Word. Có đường dẫn thì chỉ lấy tên file để tìm (xem skill mở
+file); không tự đặt đường dẫn.
 
 ## Quy trình
 1. `hotkey win+s` → `type <tên file>` (chỉ phần tên, không đuôi .docx, không dấu
@@ -27,6 +28,7 @@ Dùng khi chỉ biết tên (hoặc một phần tên) file. Có đường dẫn
    tối đa 2 lần).
 
 ## Lưu ý
-- Windows Search chỉ thấy file đã được lập chỉ mục (Documents, Desktop...). Người dùng
-  biết thư mục thì mở theo đường dẫn.
+- Windows Search chỉ thấy file đã được lập chỉ mục (Documents, Desktop...). Không thấy
+  thì `ask_user` hỏi tên khác; không mở bằng đường dẫn.
+- Nhấn Enter khi chưa xem kết quả sẽ bị hệ thống chặn và chụp màn hình thay.
 - Người dùng chọn "không file nào" → báo lại và dừng.

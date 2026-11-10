@@ -93,6 +93,8 @@ class TaskRunner(GroundingMixin):
         self._history: list[dict] = []        # recent finished requests (context)
         self._task_groups: tuple = ()          # app skill groups of the current task
         self._last_final: dict | None = None   # last done/error event sent
+        self._search_open = False   # Windows Search opened, results not looked at yet
+        self._stuck_warned = False  # the task changed nothing on screen at some point
 
     async def _ui(self, msg: dict):
         """Send an event to this device's browser, remembering the final one."""
@@ -205,8 +207,9 @@ class TaskRunner(GroundingMixin):
                                   "step": step, "max_steps": MAX_STEPS, "message": message})
 
     def _record_verified_cache(self, text: str, skill_names: list[str]) -> None:
-        """Persist only workflows whose final state was seen on a screenshot."""
-        if not is_verified_workflow(self._executed_steps):
+        """Persist only workflows whose final state was seen on a screenshot, and
+        that never got stuck: a hint replaying wasted or wrong steps does harm."""
+        if self._stuck_warned or not is_verified_workflow(self._executed_steps):
             return
         try:
             self.task_cache.record_verified(text, skill_names, self._executed_steps,
@@ -257,6 +260,8 @@ class TaskRunner(GroundingMixin):
         self._task_text = text
         self._executed_steps = []
         self._approved_names = set()
+        self._search_open = False
+        self._stuck_warned = False
         messages = [{"role": "system", "content": sys_prompt}]
         if history:
             messages.append({"role": "user", "content": self._history_note(history) + NT})
@@ -408,6 +413,7 @@ class TaskRunner(GroundingMixin):
                 elif name == "screenshot" and self._raw_frame:
                     warning = watch.screenshot(self._raw_frame)
                     if warning:
+                        self._stuck_warned = True
                         log(f"[{task_id}] màn hình không đổi ({watch.stuck}/{STUCK_LIMIT})")
                         result = f"{result} {warning}"
                 log(f"[{task_id}] step {step}: {name} => {result[:120]}")
@@ -423,7 +429,7 @@ class TaskRunner(GroundingMixin):
                 messages.append({"role": "tool", "name": name, "content": result})
                 # A screenshot attaches the captured image as the next turn's
                 # input so the vision model can read the screen.
-                if name == "screenshot" and self._pending_image is not None:
+                if self._pending_image is not None:
                     note = (f"Ảnh màn hình {self._img_w}x{self._img_h}, có LƯỚI TOẠ ĐỘ màu đỏ: "
                             "các vạch dọc/ngang cách nhau 100 px, có ghi số pixel. "
                             "Hãy ĐỌC toạ độ của phần tử theo lưới này (nội suy giữa hai vạch "
@@ -456,7 +462,13 @@ class TaskRunner(GroundingMixin):
         if name not in TOOL_NAMES:
             return f"error: tool '{name}' không được phép"
         if name == "screenshot":
+            self._search_open = False
             return await self._screenshot(task_id, force=True, attach=True)
+        if name == "hotkey" and str(args.get("combo", "")).lower().replace(" ", "") == "win+s":
+            self._search_open = True
+        if (name == "key" and self._search_open
+                and str(args.get("name", "")).lower() == "enter"):
+            return await self._look_before_enter(task_id)
         if name == "web_search":
             if not SEARCH_ENABLE:
                 return "error: web_search đang tắt (đặt SEARCH_ENABLE=true)"
@@ -602,6 +614,19 @@ class TaskRunner(GroundingMixin):
                         "screenshot kiểm tra ô nhập, xoá phần đã gõ rồi gõ lại.")
         self._invalidate_screen_cache()
         return f"ok đã gõ {len(text)} ký tự"
+
+    async def _look_before_enter(self, task_id: str) -> str:
+        """Enter right after typing into Windows Search opens whatever happens to
+        be first, often a web search or the wrong file. Show the results first."""
+        self._search_open = False
+        log(f"[{task_id}] Enter trong Windows Search khi chưa xem kết quả -> chụp trước")
+        shot = await self._screenshot(task_id, force=True, attach=True)
+        if self._pending_image is None:
+            return f"error: chưa nhấn Enter; cần xem kết quả tìm kiếm trước ({shot})"
+        return ("error: CHƯA nhấn Enter. Đã chụp kết quả tìm kiếm của Windows (ảnh ở lượt "
+                "sau). Đúng MỘT file/app khớp và nó đứng đầu → `key enter`; nằm ở dòng khác → "
+                "`tap` vào nó; nhiều kết quả giống nhau → `ask_user`; không có → thử từ khóa "
+                "ngắn hơn. Không tự đặt đường dẫn.")
 
     async def _requires_delivery(self, task_id: str, text: str) -> bool:
         """Ask the LLM whether a request with a delivery word really means sending

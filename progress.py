@@ -4,10 +4,10 @@ document, clicking something inert, a window that is not in front)."""
 from imaging import frame_signature, frames_similar
 
 STUCK_HINT = (
-    "ĐỪNG lặp lại thao tác đó. Đổi cách: tới cuối/đầu tài liệu dùng hotkey ctrl+end / "
-    "ctrl+home; trang nằm cạnh nhau hoặc cuộn bị chạy ngang thì chỉnh chế độ xem về một "
-    "trang dọc; kiểm tra cửa sổ cần dùng có đang ở trước và chuột có nằm trên vùng cần "
-    "cuộn; không biết làm gì tiếp thì ask_user.")
+    "ĐỪNG lặp lại thao tác đó; xem ẢNH để hiểu vì sao. Gợi ý theo đúng điều thấy: cuộn "
+    "trong tài liệu mà không đổi → đã tới cuối (hoặc dùng ctrl+end / ctrl+home); ảnh CÓ "
+    "2+ trang nằm cạnh nhau → chỉnh chế độ xem về một trang dọc; cửa sổ cần dùng không ở "
+    "trước → đưa nó lên; có hộp thoại → đọc và đóng nó. Không rõ → ask_user.")
 
 
 class ProgressWatch:
