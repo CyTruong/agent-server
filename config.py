@@ -126,6 +126,9 @@ CHOICE_TIMEOUT = float(os.environ.get("CHOICE_TIMEOUT_SECONDS", "180"))
 CONTEXT_TTL = float(os.environ.get("CONTEXT_TTL_SECONDS", "900"))
 CONTEXT_TURNS = int(os.environ.get("CONTEXT_TURNS", "3"))
 CONTEXT_RESULT_CHARS = int(os.environ.get("CONTEXT_RESULT_CHARS", "600"))
+# Stop a task after this many screenshots in a row showed no change after the
+# actions before them (e.g. scrolling past the end of a document). 0 = never.
+STUCK_LIMIT = int(os.environ.get("STUCK_LIMIT", "3"))
 SCREEN_CACHE_TTL = float(os.environ.get("SCREEN_CACHE_TTL_SECONDS", "6.0"))
 OCR_CACHE_TTL = float(os.environ.get("OCR_CACHE_TTL_SECONDS", "6.0"))
 SCREEN_MUTATING_TOOLS = frozenset({

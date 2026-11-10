@@ -2,6 +2,7 @@
 import glob
 import os
 import re
+import unicodedata
 
 BASE_PROMPT = (
     "Bạn là trợ lý kiêm tác tử điều khiển máy tính Windows từ xa qua các công cụ được cấp. "
@@ -66,7 +67,13 @@ ZALO_TRIGGERS = ["zalo"]
 # "đọc". The generic "tài liệu" counts only when no chat app is in scope, so a chat
 # message that mentions a document does not load the Word skills.
 WORD_TRIGGER = re.compile(r"\bword\b|\bwinword\b|\bdocx\b|\.doc\b|\bfile doc\b")
-WORD_SOFT_TRIGGER = "tài liệu"
+# Document words: they turn Word on only when no other app is named, so "gõ văn
+# bản vào notepad" or a Zalo message about a contract does not load Word skills.
+WORD_SOFT_TRIGGERS = ("tài liệu", "văn bản", "văn bản hành chính", "công văn", "tờ trình",
+                      "biên bản", "hợp đồng", "hồ sơ", "báo cáo", "đơn xin", "đơn đề nghị",
+                      "giấy mời", "thư mời", "quyết định số", "nghị quyết", "kế hoạch số")
+OTHER_APPS = ("notepad", "excel", "powerpoint", "pdf", "chrome", "edge", "trình duyệt",
+              "web", "zalo", "facebook", "messenger")
 # These give generic Windows steps that the word/* skills replace for Word.
 WORD_REPLACES = ("windows/open-app", "windows/text-editing")
 
@@ -124,8 +131,45 @@ SKILL_KEYWORDS = {
     "word/read-file":   ["đọc", "xem", "tóm tắt", "nội dung", "có gì", "kiểm tra", "nói về"],
     "word/create-file": ["tạo", "soạn", "viết", "mới", "new"],
     "word/edit-file":   ["sửa", "chỉnh", "thêm", "xoá", "xóa", "thay", "đổi", "định dạng",
-                         "in đậm", "in nghiêng", "gạch chân", "chèn", "cập nhật"],
+                         "in đậm", "in nghiêng", "gạch chân", "chèn", "cập nhật", "bổ sung",
+                         "viết thêm", "ghi thêm", "điền", "ký", "chữ ký", "cuối file",
+                         "cuối văn bản", "căn lề", "căn giữa", "căn phải", "phông", "font",
+                         "cỡ chữ", "giãn dòng", "đánh số", "gạch đầu dòng"],
+    "word/view":        ["giao diện", "hiển thị", "chế độ xem", "chế độ đọc", "một trang",
+                         "hai trang", "bốn trang", "nhiều trang", "trang đôi", "trang đơn",
+                         "sang đơn", "phóng to", "thu nhỏ", "zoom", "cuộn ngang", "dàn trang"],
 }
+
+# Loaded together with the skill on the left.
+SKILL_DEPENDS = {
+    "word/read-file": ("word/view",),
+    "word/edit-file": ("word/view",),
+}
+# A follow-up whose app was carried over but whose words match no action skill
+# ("cái đó thì sao") gets these.
+FOLLOWUP_SKILLS = {
+    "word": ("word/edit-file", "word/read-file"),
+    "zalo": ("zalo/send-message", "zalo/read-chat"),
+}
+
+
+def _fold(text: str) -> str:
+    """Lowercase without Vietnamese accents ("Bổ sung" -> "bo sung")."""
+    text = (text or "").replace("đ", "d").replace("Đ", "D")
+    text = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in text if not unicodedata.combining(c)).lower()
+
+
+def _hit(keyword: str, low: str, folded: str) -> bool:
+    """Exact substring, or the same words with other accents: a tone typo in a
+    phrase ("bồ sung" for "bổ sung"), or any keyword when the whole request was
+    typed without accents ("sua file word"). Single accented syllables are not
+    folded otherwise, because many differ only by tone ("điền" vs "diện")."""
+    if keyword in low:
+        return True
+    if " " not in keyword.strip() and low != folded:
+        return False
+    return re.search(rf"(?<!\w){re.escape(_fold(keyword))}(?!\w)", folded) is not None
 
 
 SKILLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills")
@@ -163,16 +207,22 @@ def select_skills(text: str, carry: tuple = ()) -> tuple[str, list]:
     is in scope. Naming Zalo explicitly suppresses Facebook so the two chat apps'
     skills never load together (Facebook also triggers on generic chat words)."""
     low = f" {text.lower()} "
+    folded = _fold(low)
     zalo_on = any(k in low for k in ZALO_TRIGGERS)
     facebook_on = (not zalo_on) and any(k in low for k in FACEBOOK_TRIGGERS)
     word_on = bool(WORD_TRIGGER.search(low)) or (
-        WORD_SOFT_TRIGGER in low and not (zalo_on or facebook_on))
+        any(_hit(k, low, folded) for k in WORD_SOFT_TRIGGERS)
+        and not any(_hit(app, low, folded) for app in OTHER_APPS)
+        and not (zalo_on or facebook_on))
+    carried = set()
     # A follow-up that names no app ("đổi TP.HCM thành Hà Nội") keeps the app of
     # the previous request; naming an app always wins.
     if carry and not (zalo_on or facebook_on or word_on):
         zalo_on = "zalo" in carry
         facebook_on = "facebook" in carry and not zalo_on
         word_on = "word" in carry
+        carried = {g for g, on in (("zalo", zalo_on), ("facebook", facebook_on),
+                                   ("word", word_on)) if on}
     active = {"facebook": facebook_on, "zalo": zalo_on, "word": word_on}   # gated groups
     chosen = []
     for name, kws in SKILL_KEYWORDS.items():
@@ -181,8 +231,13 @@ def select_skills(text: str, carry: tuple = ()) -> tuple[str, list]:
         group = name.split("/", 1)[0]
         if group in active and not active[group]:
             continue
-        if kws is None or any(k in low for k in kws):
+        if kws is None or any(_hit(k, low, folded) for k in kws):
             chosen.append(name)
+    for group in carried:
+        if not any(n.startswith(group + "/") and SKILL_KEYWORDS[n] is not None for n in chosen):
+            chosen += [n for n in FOLLOWUP_SKILLS.get(group, ()) if n in ALL_SKILLS]
+    for name in list(chosen):
+        chosen += [d for d in SKILL_DEPENDS.get(name, ()) if d in ALL_SKILLS and d not in chosen]
     if not chosen:
         return "", []
     body = "\n\n---\n\n".join(ALL_SKILLS[n] for n in chosen)

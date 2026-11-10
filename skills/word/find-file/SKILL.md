@@ -4,7 +4,8 @@ Dùng khi chỉ biết tên (hoặc một phần tên) file. Có đường dẫn
 
 ## Quy trình
 1. `hotkey win+s` → `type <tên file>` (chỉ phần tên, không đuôi .docx, không dấu
-   nháy) → `screenshot`. Kết quả chưa hiện thì chụp thêm một lần.
+   nháy) → `screenshot`. KHÔNG nhấn Enter trước khi nhìn kết quả. Kết quả chưa hiện
+   thì chụp thêm một lần.
 2. Đọc các dòng là **file Word**: icon Word, dòng phụ "Word · Last modified ..." (bản
    tiếng Việt: "Word · Sửa đổi lần cuối ..."). Bỏ qua thư mục (Folders), file Excel/PDF
    và dòng "'<chữ>' See more search results / Xem thêm kết quả" (đó là tìm web).

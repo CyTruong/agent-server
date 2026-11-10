@@ -28,6 +28,25 @@ def annotate_grid(jpeg: bytes, step: int = 100):
     return out.getvalue(), (w, h)
 
 
+def frame_signature(image: bytes, size: tuple = (32, 18)):
+    """A tiny grayscale thumbnail used to tell whether the screen changed, or None
+    if the image cannot be read."""
+    try:
+        from io import BytesIO
+        from PIL import Image
+        return Image.open(BytesIO(image)).convert("L").resize(size, Image.BOX).tobytes()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def frames_similar(a: bytes, b: bytes, tolerance: float = 2.5) -> bool:
+    """Mean absolute difference of two signatures (0-255 scale) within tolerance.
+    A blinking caret or clock barely moves it; a scrolled page moves it a lot."""
+    if not a or len(a) != len(b):
+        return False
+    return sum(abs(x - y) for x, y in zip(a, b)) / len(a) <= tolerance
+
+
 def prune_images(messages: list, keep: int) -> int:
     """Drop images from all but the newest `keep` messages that carry one, in
     place, leaving a text note. Returns how many were dropped."""

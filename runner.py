@@ -32,11 +32,13 @@ from config import (
     SCREEN_CACHE_TTL,
     SCREEN_MUTATING_TOOLS,
     SEARCH_ENABLE,
+    STUCK_LIMIT,
     TASK_TIMEOUT,
     THINK,
 )
 from grounding import GroundingMixin
 from imaging import annotate_grid, prune_images
+from progress import ProgressWatch
 from intents import (
     _is_ask_or_blocked,
     _needs_delivery,
@@ -277,6 +279,7 @@ class TaskRunner(GroundingMixin):
         delivered = False  # has the agent actually typed/sent anything yet?
         deliver_nudges = 0 # times we pushed it to finish the "send" part
         send_checked = False  # already forced a screenshot after the send?
+        watch = ProgressWatch(STUCK_LIMIT)   # actions that change nothing on screen
         needs_deliver = _needs_delivery(text) and await self._requires_delivery(task_id, text)
 
         # Plan-and-execute: decompose a multi-step request first, keep it as a
@@ -398,6 +401,15 @@ class TaskRunner(GroundingMixin):
                 except Exception as e:  # noqa: BLE001 - e.g. malformed model arguments
                     log(f"[{task_id}] tool {name} crashed:\n{traceback.format_exc()}")
                     result = f"error: không chạy được {name}: {e}"
+                if result.startswith("error"):
+                    pass
+                elif name in SCREEN_MUTATING_TOOLS:
+                    watch.action(name)
+                elif name == "screenshot" and self._raw_frame:
+                    warning = watch.screenshot(self._raw_frame)
+                    if warning:
+                        log(f"[{task_id}] màn hình không đổi ({watch.stuck}/{STUCK_LIMIT})")
+                        result = f"{result} {warning}"
                 log(f"[{task_id}] step {step}: {name} => {result[:120]}")
                 self._executed_steps.append({
                     "tool": name,
@@ -421,8 +433,24 @@ class TaskRunner(GroundingMixin):
                                      "images": [self._pending_image]})
                     self._pending_image = None
 
+            if watch.exhausted:
+                log(f"[{task_id}] dừng: màn hình không đổi {watch.stuck} lần liên tiếp")
+                await self._ui({"type": "done", "task_id": task_id, "result":
+                    f"Dừng vì bị kẹt: màn hình không thay đổi sau {watch.stuck} lần thao tác "
+                    f"liên tiếp. {self._steps_summary()}"})
+                return
+
         await self._ui({"type": "done", "task_id": task_id,
-                                  "result": f"đạt giới hạn {MAX_STEPS} bước"})
+                        "result": f"Đạt giới hạn {MAX_STEPS} bước, chưa xong. "
+                                  f"{self._steps_summary()}"})
+
+    def _steps_summary(self, count: int = 6) -> str:
+        """The last few tool calls, so a stopped task says where it got stuck."""
+        parts = []
+        for item in self._executed_steps[-count:]:
+            args = ", ".join(f"{k}={str(v)[:30]}" for k, v in item["arguments"].items())
+            parts.append(f"{item['tool']}({args})")
+        return ("Các bước cuối: " + "; ".join(parts)) if parts else ""
 
     async def _run_tool(self, task_id: str, name: str, args: dict) -> str:
         if name not in TOOL_NAMES:

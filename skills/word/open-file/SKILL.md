@@ -1,7 +1,8 @@
 # [Word] Mở một file tài liệu
 
 ## Quy trình
-1. `screenshot`. Thanh tiêu đề Word đã ghi đúng tên file → xong.
+1. `screenshot` TRƯỚC TIÊN. Thanh tiêu đề Word đã ghi đúng tên file → xong, KHÔNG mở
+   lại (ngữ cảnh nói đã mở trước đó thì vẫn phải thấy trên ảnh).
 2. Chỉ có tên file → làm theo skill **tìm và mở file bằng Windows Search** (`win+s`).
 3. Có đường dẫn đầy đủ:
    - Đang có Word: `hotkey ctrl+f12` → `type <đường dẫn>` → `key enter`.
