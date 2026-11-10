@@ -222,7 +222,7 @@ class GroundingMixin:
             log(f"[{task_id}] OCR error: {e}")
             return None
         if items is None:
-            log(f"[{task_id}] OCR unavailable (chưa cài paddleocr?) -> fallback")
+            log(f"[{task_id}] OCR unavailable (chưa cài easyocr?) -> fallback")
             return None
         self._ocr_cache_hash = self._frame_hash
         self._ocr_cache_at = time.monotonic()

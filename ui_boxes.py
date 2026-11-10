@@ -6,7 +6,7 @@ matching can never catch.
 detect_boxes(jpeg_bytes) -> [{x0,y0,x1,y1,cx,cy}] in full-image pixels, or [] if
 OpenCV is missing or anything fails. Best-effort only - never raises.
 
-OpenCV ships as a dependency of paddleocr, so it is usually already installed.
+OpenCV ships as a dependency of easyocr, so it is usually already installed.
 """
 from __future__ import annotations
 

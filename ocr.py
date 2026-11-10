@@ -5,10 +5,13 @@ detected text region with its recognised string and bounding box, so the agent
 can label them and let the VLM pick one by number (coordinates come from OCR, not
 from the model guessing pixels).
 
-Backends (OCR_BACKEND env): "auto" (default: PaddleOCR, else EasyOCR), "paddle",
-or "easyocr". Install one of:
-    pip install "paddleocr>=2.7,<3.0" "paddlepaddle>=2.6"
-    pip install easyocr      # tip: install CPU torch first to keep it small
+Backends (OCR_BACKEND env): "auto" (default: EasyOCR, else PaddleOCR), "easyocr"
+or "paddle". EasyOCR comes first because it keeps Vietnamese accents; PaddleOCR
+2.x reads Vietnamese with its latin model and drops most of them ("Trường" ->
+"Trudng"), which makes every name check ask the user. Install:
+    pip install torch --index-url https://download.pytorch.org/whl/cpu   # small CPU build
+    pip install easyocr
+    pip install "paddleocr>=2.7,<3.0" "paddlepaddle>=2.6"   # optional fallback
 Both run on CPU (gpu off) so they never compete with Ollama for VRAM. If no
 backend loads, run_ocr returns None and the caller falls back to the grid locate.
 The engine is loaded once and reused.
@@ -29,28 +32,25 @@ def _load(lang: str):
         return _kind, _engine
     _tried = True
     backend = os.environ.get("OCR_BACKEND", "auto").lower()
+    order = {"easyocr": ("easyocr",), "paddle": ("paddle",)}.get(backend, ("easyocr", "paddle"))
 
-    if backend in ("auto", "paddle"):
+    for kind in order:
         try:
-            from paddleocr import PaddleOCR
-            # use_angle_cls off: screen text is upright; faster.
-            _engine = PaddleOCR(use_angle_cls=False, lang=lang, show_log=False)
-            _kind = "paddle"
-            print("[ocr] backend: PaddleOCR", flush=True)
+            if kind == "easyocr":
+                import easyocr
+                langs = [lang, "en"] if lang != "en" else ["en"]
+                # First use downloads the models (~100 MB) into ~/.EasyOCR.
+                _engine = easyocr.Reader(langs, gpu=False)
+                print(f"[ocr] backend: EasyOCR {langs}", flush=True)
+            else:
+                from paddleocr import PaddleOCR
+                # use_angle_cls off: screen text is upright; faster.
+                _engine = PaddleOCR(use_angle_cls=False, lang=lang, show_log=False)
+                print("[ocr] backend: PaddleOCR", flush=True)
+            _kind = kind
             return _kind, _engine
         except Exception as e:  # noqa: BLE001 - not installed / init error
-            print(f"[ocr] PaddleOCR unavailable: {e}", flush=True)
-
-    if backend in ("auto", "easyocr"):
-        try:
-            import easyocr
-            langs = [lang, "en"] if lang != "en" else ["en"]
-            _engine = easyocr.Reader(langs, gpu=False)
-            _kind = "easyocr"
-            print(f"[ocr] backend: EasyOCR {langs}", flush=True)
-            return _kind, _engine
-        except Exception as e:  # noqa: BLE001
-            print(f"[ocr] EasyOCR unavailable: {e}", flush=True)
+            print(f"[ocr] {kind} unavailable: {e}", flush=True)
 
     _engine, _kind = None, None
     return _kind, _engine

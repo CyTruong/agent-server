@@ -37,7 +37,7 @@ SAVE_IMAGES = os.environ.get("SAVE_IMAGES", "true").lower() in ("1", "true", "ye
 IMAGE_DIR = os.environ.get("IMAGE_DIR", "debug_images")
 # OCR Set-of-Mark locate: find text regions, label them, let the model pick one
 # by number (exact coords from OCR). Falls back to the 3x3 grid when OCR finds
-# nothing or the target has no text. Needs paddleocr+paddlepaddle (CPU).
+# nothing or the target has no text. Needs easyocr (CPU); see ocr.py.
 OCR_ENABLE = os.environ.get("OCR_ENABLE", "true").lower() in ("1", "true", "yes")
 OCR_LANG = os.environ.get("OCR_LANG", "vi")
 # web_search tool: let the model look things up on the Internet from the server
