@@ -1,11 +1,9 @@
 # [Chung] Định vị phần tử để bấm
 
 ## Công cụ `tap` (ưu tiên hơn click toạ độ)
-`tap(target, keywords, area, anchor, relation)` — hệ thống tự tìm vị trí:
-1. **OCR**: tìm chữ khớp `keywords`. Nhãn nút không phân biệt dấu; **tên người phải
-   đúng dấu**, không chắc thì hệ thống hỏi người dùng trước khi bấm.
-2. **Lưới 3×3 lồng nhau**: không có chữ khớp thì chia ảnh (hoặc vùng tìm) thành 9 ô,
-   hỏi mục tiêu ở ô nào, phóng to và lặp tới khi đủ nhỏ.
+`tap(target, keywords, area, anchor, relation)` — hệ thống tự tìm vị trí (UIA, OCR kể cả
+chụp vùng ở độ phân giải thật, rồi các lớp dự phòng). **Tên người phải đúng dấu**; không
+chắc thì hệ thống hỏi người dùng trước khi bấm.
 
 ## Điền tham số cho chính xác
 - `target`: mô tả ngắn, cụ thể ("ô nhập tin nhắn khung chat Trường").
@@ -18,8 +16,6 @@
   - `below` / `above` / `left_of` / `right_of`: nằm phía đó so với mốc;
   - `bottom_of`: phần dưới cùng của khung nằm dưới mốc (ô nhập ở đáy khung chat);
   - `near`: quanh mốc; `on`: bấm chính mốc.
-- Khi một chữ xuất hiện nhiều nơi (tên người ở danh sách và ở đầu khung chat), luôn
-  thêm `area` hoặc `anchor` để tách đúng chỗ.
 
 ## Khi không trúng
 - Kết quả `tap` có ghi cách định vị trong ngoặc. `screenshot` để kiểm tra.

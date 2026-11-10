@@ -169,6 +169,33 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "zoom",
+            "description": ("Chụp RIÊNG một vùng màn hình ở độ phân giải thật để ĐỌC chữ nhỏ "
+                           "(tên file trên thanh tiêu đề, nút trên ribbon/thanh công cụ, kết "
+                           "quả tìm kiếm, tên người, số liệu). Trả về ảnh vùng đó (lượt sau) và "
+                           "chữ đọc được. Chỉ để đọc; muốn bấm thì dùng tap với keywords là chữ "
+                           "vừa đọc. Chọn area theo tên, hoặc box [x0,y0,x1,y1] theo lưới của "
+                           "ảnh screenshot gần nhất."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "area": {
+                        "type": "string",
+                        "enum": ["title", "top_bar", "top", "bottom", "left", "right", "center",
+                                 "top_left", "top_right", "bottom_left", "bottom_right",
+                                 "taskbar"],
+                        "description": ("title = thanh tiêu đề cửa sổ; top_bar = tiêu đề + "
+                                        "ribbon/thanh công cụ; các vùng còn lại theo tên"),
+                    },
+                    "box": {"type": "array", "items": {"type": "integer"},
+                            "description": "[x0,y0,x1,y1] trên ảnh screenshot gần nhất"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "ask_user",
             "description": ("Hỏi người dùng và CHỜ câu trả lời rồi làm tiếp. Dùng khi phân vân: "
                            "nhiều file/người/mục trùng hoặc gần giống nhau, không rõ nền tảng, "

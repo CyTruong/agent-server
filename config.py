@@ -129,6 +129,9 @@ CONTEXT_RESULT_CHARS = int(os.environ.get("CONTEXT_RESULT_CHARS", "600"))
 # Stop a task after this many screenshots in a row showed no change after the
 # actions before them (e.g. scrolling past the end of a document). 0 = never.
 STUCK_LIMIT = int(os.environ.get("STUCK_LIMIT", "3"))
+# Capture small screen regions at native resolution (needs the matching firmware
+# and PC agent; falls back to cropping the full screenshot when they are older).
+NATIVE_CAPTURE = os.environ.get("NATIVE_CAPTURE", "true").lower() in ("1", "true", "yes")
 SCREEN_CACHE_TTL = float(os.environ.get("SCREEN_CACHE_TTL_SECONDS", "6.0"))
 OCR_CACHE_TTL = float(os.environ.get("OCR_CACHE_TTL_SECONDS", "6.0"))
 SCREEN_MUTATING_TOOLS = frozenset({

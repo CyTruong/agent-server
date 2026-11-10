@@ -8,6 +8,7 @@ import traceback
 import config  # noqa: F401 - must load .env before web_search reads os.environ
 import agent_log
 import llm
+import ocr
 import web_search
 from agent_log import clip, dump_messages, log
 from config import (
@@ -28,6 +29,8 @@ from config import (
     MODEL,
     NT,
     NUM_CTX,
+    OCR_ENABLE,
+    OCR_LANG,
     PLAN_ENABLE,
     SCREEN_CACHE_TTL,
     SCREEN_MUTATING_TOOLS,
@@ -37,8 +40,9 @@ from config import (
     THINK,
 )
 from grounding import GroundingMixin
-from imaging import annotate_grid, prune_images
+from imaging import annotate_grid, crop_image, image_size, prune_images
 from progress import ProgressWatch
+from regions import ZOOM_AREAS, fraction_box, image_box_to_screen, ocr_lines
 from intents import (
     _is_ask_or_blocked,
     _needs_delivery,
@@ -94,6 +98,8 @@ class TaskRunner(GroundingMixin):
         self._task_groups: tuple = ()          # app skill groups of the current task
         self._last_final: dict | None = None   # last done/error event sent
         self._search_open = False   # Windows Search opened, results not looked at yet
+        self._pending_note = None   # caption for _pending_image when it is not a screenshot
+        self._shot_size = (0, 0)    # size of the last full screenshot (kept for zoom boxes)
         self._stuck_warned = False  # the task changed nothing on screen at some point
 
     async def _ui(self, msg: dict):
@@ -199,6 +205,7 @@ class TaskRunner(GroundingMixin):
         self._ocr_cache_items = None
         annotated, (width, height) = annotate_grid(image)
         self._img_w, self._img_h = width, height
+        self._shot_size = (width, height)
         self._scr_w, self._scr_h = self.relay.frame_sw, self.relay.frame_sh
         return annotated, (width, height)
 
@@ -430,7 +437,8 @@ class TaskRunner(GroundingMixin):
                 # A screenshot attaches the captured image as the next turn's
                 # input so the vision model can read the screen.
                 if self._pending_image is not None:
-                    note = (f"Ảnh màn hình {self._img_w}x{self._img_h}, có LƯỚI TOẠ ĐỘ màu đỏ: "
+                    note = self._pending_note or (
+                            f"Ảnh màn hình {self._img_w}x{self._img_h}, có LƯỚI TOẠ ĐỘ màu đỏ: "
                             "các vạch dọc/ngang cách nhau 100 px, có ghi số pixel. "
                             "Hãy ĐỌC toạ độ của phần tử theo lưới này (nội suy giữa hai vạch "
                             "gần nhất), đừng đoán. Cho move/click theo pixel trên ảnh; hệ "
@@ -438,6 +446,7 @@ class TaskRunner(GroundingMixin):
                     messages.append({"role": "user", "content": note + NT,
                                      "images": [self._pending_image]})
                     self._pending_image = None
+                    self._pending_note = None
 
             if watch.exhausted:
                 log(f"[{task_id}] dừng: màn hình không đổi {watch.stuck} lần liên tiếp")
@@ -488,6 +497,9 @@ class TaskRunner(GroundingMixin):
             return res
         if name == "tap":
             return await self._tap(task_id, args)
+        if name == "zoom":
+            self._search_open = False   # looking at the results counts
+            return await self._zoom(task_id, args)
         if name == "ask_user":
             return await self._ask_user_tool(task_id, args)
         # Image-space coords from the model: refine by zoom, then map to screen.
@@ -614,6 +626,77 @@ class TaskRunner(GroundingMixin):
                         "screenshot kiểm tra ô nhập, xoá phần đã gõ rồi gõ lại.")
         self._invalidate_screen_cache()
         return f"ok đã gõ {len(text)} ký tự"
+
+    async def _capture_region(self, task_id: str, x: int, y: int, w: int, h: int) -> tuple:
+        """Capture one screen rectangle. Returns (image, scale, native): image pixel
+        (px, py) is screen (x + px / scale, y + py / scale). native is False when the
+        PC agent or firmware is older and the region was cut out of a full (scaled)
+        screenshot instead. (None, 0.0, False) on failure."""
+        request_id = new_request_id()
+        try:
+            waiter = self.relay.arm_frame(request_id)
+            res = await self.relay.call_device("screenshot", {"region": [x, y, w, h]}, task_id,
+                                               timeout=DEVICE_TIMEOUT, request_id=request_id)
+            if not res.get("ok"):
+                log(f"[{task_id}] chụp vùng lỗi: {res.get('error', '?')}")
+                return None, 0.0, False
+            image = await asyncio.wait_for(waiter, 12)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 - timeout, relay down, old fake relay
+            log(f"[{task_id}] chụp vùng lỗi: {type(e).__name__}: {e}")
+            return None, 0.0, False
+        size = image_size(image) if image else None
+        if not size:
+            return None, 0.0, False
+        detail = (res.get("result") or {}).get("detail", "") or ""
+        if "region" in detail:
+            return image, size[0] / w, True
+        scale = size[0] / (self.relay.frame_sw or size[0])
+        crop = crop_image(image, (x * scale, y * scale, (x + w) * scale, (y + h) * scale))
+        return crop, scale, False
+
+    async def _zoom(self, task_id: str, args: dict) -> str:
+        """The zoom tool: a region at native resolution plus the text read in it."""
+        screen_w, screen_h = self.relay.frame_sw, self.relay.frame_sh
+        if not screen_w:
+            await self._screenshot(task_id, force=True, attach=False)
+            screen_w, screen_h = self.relay.frame_sw, self.relay.frame_sh
+            if not screen_w:
+                return "error: chưa biết kích thước màn hình (screenshot trước)"
+        box, area = args.get("box"), str(args.get("area") or "").lower()
+        if isinstance(box, list) and len(box) == 4 and all(isinstance(v, (int, float)) for v in box):
+            if not self._shot_size[0]:
+                return "error: chưa có screenshot để hiểu toạ độ box; dùng area"
+            x, y, w, h = image_box_to_screen(box, *self._shot_size, screen_w, screen_h)
+            label = f"box {list(box)}"
+        elif area in ZOOM_AREAS:
+            x, y, w, h = fraction_box(ZOOM_AREAS[area], screen_w, screen_h)
+            label = area
+        else:
+            return ("error: cần area (" + ", ".join(ZOOM_AREAS) + ") hoặc box [x0,y0,x1,y1]")
+        image, _scale, native = await self._capture_region(task_id, x, y, w, h)
+        if image is None:
+            return "error: không chụp được vùng này"
+        self._save(task_id, f"zoom_{area or 'box'}", image,
+                   "jpg" if image[:2] == b"\xff\xd8" else "png")
+        text = ""
+        if OCR_ENABLE:
+            try:
+                items = await asyncio.get_running_loop().run_in_executor(
+                    None, ocr.run_ocr, image, OCR_LANG)
+                text = ocr_lines(items) if items else ""
+            except Exception as e:  # noqa: BLE001
+                log(f"[{task_id}] zoom OCR lỗi: {e}")
+        how = ("độ phân giải thật" if native else
+               "cắt từ ảnh toàn màn hình vì thiết bị chưa hỗ trợ chụp vùng")
+        log(f"[{task_id}] zoom {label} -> màn hình ({x},{y}) {w}x{h}, {how}")
+        self._pending_image = image
+        self._pending_note = (f"Ảnh PHÓNG TO vùng {label} (màn hình x {x}..{x + w}, y {y}..{y + h}), "
+                              f"{how}. Chỉ để ĐỌC; muốn bấm thì dùng tap với keywords là chữ "
+                              "đọc được ở đây.")
+        return (f"ok: đã chụp vùng {label} ({how}), ảnh ở lượt sau."
+                + (f" Chữ trong vùng:\n{text}" if text else " OCR không đọc được chữ nào."))
 
     async def _look_before_enter(self, task_id: str) -> str:
         """Enter right after typing into Windows Search opens whatever happens to

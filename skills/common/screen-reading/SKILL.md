@@ -4,8 +4,10 @@
 - Mỗi lần cần biết trên màn hình có gì: gọi `screenshot`. Ảnh đính ở lượt kế.
 - Ảnh có **lưới đỏ** mỗi 100 px, có ghi số pixel ở mép. Dùng lưới để mô tả vị trí
   (vd "khung chat nằm khoảng x 900–1250, y 380–720"), không đoán số.
-- Mô tả bố cục theo **vùng**: trái / giữa / phải, trên / dưới. Đọc tên, nhãn nút, chữ
-  gợi ý trong ô nhập đúng như hiển thị — các chữ này sẽ là `keywords`/`anchor`.
+- Đọc tên, nhãn nút, chữ gợi ý đúng như hiển thị — đó là `keywords`/`anchor`.
+- Chữ nhỏ, khó đọc → `zoom` (area "title", "top_bar", "left", "right", "bottom",
+  "center"... hoặc box theo lưới): ảnh vùng đó ở độ phân giải thật + chữ đọc được.
+  KHÔNG đoán chữ nhỏ. Kiểm tra cửa sổ/file đang mở: `zoom` area "title".
 
 ## Xác minh
 - Sau mỗi hành động quan trọng (bấm, gõ, gửi): `screenshot` lại và chỉ kết luận khi

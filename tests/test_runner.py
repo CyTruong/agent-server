@@ -158,6 +158,7 @@ def prepared_runner(monkeypatch, items, confirm=None):
     monkeypatch.setattr(grounding, "OCR_ENABLE", True)
     monkeypatch.setattr(grounding, "UIA_ENABLE", False)
     monkeypatch.setattr(grounding, "SAVE_IMAGES", False)
+    monkeypatch.setattr(grounding, "NATIVE_CAPTURE", False)   # FakeRelay has no frames
 
     async def fake_ocr(task_id):
         return items

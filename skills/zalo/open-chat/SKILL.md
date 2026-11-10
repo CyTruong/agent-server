@@ -10,7 +10,8 @@
    - `hotkey ctrl+a` (xoá chữ tìm cũ nếu có) → `type <tên X>` → `screenshot`. Kết quả
      chưa hiện thì `screenshot` thêm một lần.
    - `tap` target "kết quả tìm kiếm <X>", keywords ["<tên X>"], area "left".
-4. `screenshot` xác minh: **đầu khung trò chuyện (khu vực chính) ghi đúng TÊN X**.
+4. Xác minh: `zoom` area "top_bar" đọc **tên ở đầu khung trò chuyện** (khu vực chính),
+   phải đúng TÊN X.
 5. Tìm kiếm không có kết quả khớp → `ask_user` "Không tìm thấy <X> trong Zalo, ý bạn là
    ai?", options là các tên gần giống đang thấy (nếu có). KHÔNG dùng một cuộc trò chuyện
    đang hiển thị sẵn.

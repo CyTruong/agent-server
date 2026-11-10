@@ -8,7 +8,8 @@
 3. Cần xem tin cũ hơn → `move` con trỏ vào giữa khung trò chuyện (KHÔNG bấm, tránh mở
    nhầm ảnh/link), `scroll` amount **dương** (vd 5) để cuộn lên, `screenshot`; lặp
    đến khi đủ ngữ cảnh hoặc hết tin.
-4. Đọc nội dung từng bong bóng, phân biệt ai nói (trái = người kia, phải = bạn).
+4. Đọc nội dung từng bong bóng, phân biệt ai nói (trái = người kia, phải = bạn). Chữ
+   nhỏ → `zoom` area "right" hoặc box quanh khung chat để đọc chính xác.
 5. Trả lời người dùng: tóm tắt ngắn gọn ai nhắn gì / nội dung họ cần.
 
 ## Lưu ý

@@ -27,6 +27,8 @@ Mục **"Người liên hệ"**: danh sách tên bạn bè đang hoạt động;
 - Giữa: các tin nhắn. Đáy khung: ô nhập có chữ gợi ý **"Aa"**, bên phải là icon gửi.
 - Có thể có nhiều khung chat cạnh nhau: luôn xác định đúng khung qua tên ở đầu khung.
 
+Chữ nhỏ (tên người, nội dung bài, tin nhắn) → `zoom` vùng đó để đọc chính xác.
+
 ## Quy tắc chung trên Facebook
 - Chỉ thao tác trên tài khoản của người dùng, theo đúng yêu cầu; không tương tác hàng
   loạt (nhắn/bình luận/thích liên tục cho nhiều người), không mạo danh. Yêu cầu có

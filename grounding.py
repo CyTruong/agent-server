@@ -17,6 +17,7 @@ from config import (
     MARKS_ENABLE,
     MARKS_MAX,
     MODEL,
+    NATIVE_CAPTURE,
     NUM_CTX,
     OCR_CACHE_TTL,
     OCR_ENABLE,
@@ -57,6 +58,7 @@ from matching import (
     resolve_name,
     NameResolution,
 )
+from regions import TAP_AREAS, fraction_box, image_box_to_screen
 from relay_client import new_request_id
 
 # Where Zalo's chat header sits, as a fraction of the screen. A name outside it (for
@@ -788,6 +790,49 @@ class GroundingMixin:
             return items or []
         return self._zalo_header(items)
 
+    async def _native_crop(self, task_id: str, box: dict):
+        """The OCR box captured again at native resolution (sharper accents), or
+        None when that is not possible."""
+        if not (NATIVE_CAPTURE and self._img_w and self._scr_w):
+            return None
+        region = image_box_to_screen((box["x0"], box["y0"], box["x1"], box["y1"]),
+                                     self._img_w, self._img_h, self._scr_w, self._scr_h, pad=8)
+        image, _scale, native = await self._capture_region(task_id, *region)
+        return image if native else None
+
+    async def _tap_native_ocr(self, task_id: str, kws: list, area: str, region):
+        """Small text (ribbon buttons, menus) is often unreadable on the scaled
+        screenshot. Capture the target's area at native resolution, OCR it, and
+        return the screen point of a confident keyword match, or None."""
+        if not (NATIVE_CAPTURE and kws and self._img_w and self._scr_w):
+            return None
+        if region is not None:
+            box = image_box_to_screen(region, self._img_w, self._img_h, self._scr_w, self._scr_h)
+        elif area in TAP_AREAS:
+            box = fraction_box(TAP_AREAS[area], self._scr_w, self._scr_h)
+        else:
+            return None
+        image, scale, native = await self._capture_region(task_id, *box)
+        if image is None or not native:
+            return None
+        self._save(task_id, "tap_native", image, "jpg")
+        loop = asyncio.get_running_loop()
+        try:
+            items = await loop.run_in_executor(None, ocr.run_ocr, image, OCR_LANG)
+        except Exception as e:  # noqa: BLE001
+            log(f"[{task_id}] OCR vùng lỗi: {e}")
+            return None
+        if not items:
+            return None
+        scored = sorted(((max(_sim(k, it["text"]) for k in kws), it) for it in items),
+                        key=lambda pair: -pair[0])
+        log(f"[{task_id}] OCR vùng {box}: " + ", ".join(
+            f"'{it['text']}'={s:.2f}" for s, it in scored[:4]))
+        best_score, best = scored[0]
+        if best_score < OCR_EXACT_MIN:
+            return None
+        return round(box[0] + best["cx"] / scale), round(box[1] + best["cy"] / scale)
+
     def _name_crop(self, box: dict):
         """PNG of one OCR box from the current frame, enlarged; None on failure."""
         try:
@@ -841,8 +886,10 @@ class GroundingMixin:
         re-read settles it. Anything else stays uncertain."""
         if res.status != "uncertain" or not is_lossy_read(names, res.box["text"]):
             return res
-        for box in [c for c in res.candidates if is_lossy_read(names, c["text"])][:4]:
-            png = self._name_crop(box)
+        lossy = [c for c in res.candidates if is_lossy_read(names, c["text"])][:4]
+        for index, box in enumerate(lossy):
+            png = (await self._native_crop(task_id, box) if index < 2 else None) \
+                or self._name_crop(box)
             if png is None:
                 continue
             readings = await self._read_crop(task_id, png)
@@ -1073,6 +1120,13 @@ class GroundingMixin:
                                      thr=OCR_EXACT_MIN)
             if ex:
                 pt, how = ex, "OCR-exact"
+
+        # The same text at native resolution, before asking a model to point at it.
+        if pt is None and kws:
+            native = await self._tap_native_ocr(task_id, kws, area, region)
+            if native:
+                return await self._finish_tap(task_id, target, native[0], native[1],
+                                              "OCR-native", unverified)
 
         if pt is None and not tars_first:
             tapped = await self._tap_with_tars(task_id, target, area, anchor_kws, region, unverified)

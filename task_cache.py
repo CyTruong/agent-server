@@ -38,7 +38,7 @@ def is_verified_workflow(steps: list[dict[str, Any]]) -> bool:
         (i for i, step in enumerate(steps) if step["tool"] in SCREEN_MUTATING_TOOLS),
         default=-1,
     )
-    return any(step["tool"] == "screenshot" for step in steps[last_action + 1:])
+    return any(step["tool"] in ("screenshot", "zoom") for step in steps[last_action + 1:])
 
 
 # A tap's target/keywords/anchor hold names of people. A hint carrying them can

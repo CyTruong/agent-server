@@ -13,5 +13,6 @@
 ## Giới hạn
 - Mỗi tác vụ đọc được khoảng 8 màn hình. Chưa đọc hết → nói rõ "đã đọc tới mục/trang
   ...", không gọi đó là tóm tắt toàn bộ tài liệu.
-- Chữ đọc không rõ thì nói là không rõ, đừng đoán số liệu hay tên riêng.
+- Chữ nhỏ/không rõ → `zoom` box quanh đoạn đó; vẫn không rõ thì nói là không rõ, đừng
+  đoán số liệu hay tên riêng.
 - Chỉ đọc: không gõ, không lưu.

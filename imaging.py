@@ -47,6 +47,31 @@ def frames_similar(a: bytes, b: bytes, tolerance: float = 2.5) -> bool:
     return sum(abs(x - y) for x, y in zip(a, b)) / len(a) <= tolerance
 
 
+def image_size(image: bytes):
+    """(width, height) of an encoded image, or None."""
+    try:
+        from io import BytesIO
+        from PIL import Image
+        return Image.open(BytesIO(image)).size
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def crop_image(image: bytes, box: tuple):
+    """PNG of the (x0, y0, x1, y1) part of an encoded image, or None."""
+    try:
+        from io import BytesIO
+        from PIL import Image
+        im = Image.open(BytesIO(image)).convert("RGB")
+        x0, y0, x1, y1 = (int(round(v)) for v in box)
+        crop = im.crop((max(0, x0), max(0, y0), min(im.width, x1), min(im.height, y1)))
+        out = BytesIO()
+        crop.save(out, format="PNG")
+        return out.getvalue()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def prune_images(messages: list, keep: int) -> int:
     """Drop images from all but the newest `keep` messages that carry one, in
     place, leaving a text note. Returns how many were dropped."""

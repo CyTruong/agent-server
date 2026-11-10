@@ -8,7 +8,7 @@ Dùng khi yêu cầu KHÔNG nói rõ ứng dụng/nền tảng (vd "gửi tin nh
 1. `screenshot` TRƯỚC KHI làm gì khác.
 2. Nhận diện ứng dụng đang ở TIỀN CẢNH từ ảnh:
    - **Thanh tiêu đề** cửa sổ trên cùng (vd "Zalo - <tên>"), hoặc tiêu đề tab trình
-     duyệt ("... Facebook").
+     duyệt ("... Facebook"). Chữ nhỏ → `zoom` area "title".
    - **Giao diện đặc trưng:** Zalo (danh sách trò chuyện trái + ô "Tìm kiếm" + ô
      "Nhập @, tin nhắn tới"); Facebook (thanh xanh "f", "Tìm kiếm trên Facebook",
      khung chat nổi góc phải dưới); hoặc app khác.
