@@ -208,6 +208,83 @@ def resolve_name(names: list, items: list) -> NameResolution:
     return NameResolution("uncertain", boxes[0], boxes)
 
 
+# Kinship words, full or abbreviated as in contact names ("A Vinh" = anh Vinh).
+_HONORIFICS = frozenset({"a", "anh", "c", "chị", "chi", "e", "em", "cô", "co", "chú", "chu",
+                         "bác", "bac", "ông", "ong", "bà", "ba"})
+# Capitalised words right after one of these name the person the user means.
+_PERSON_MARKERS = frozenset({"cho", "đến", "tới", "với", "và", "anh", "chị", "em", "cô",
+                             "chú", "bác", "ông", "bà"})
+
+
+def is_ui_label(keyword: str) -> bool:
+    return _norm(keyword) in _UI_LABELS
+
+
+def _core_words(words: list) -> list:
+    """The name without leading kinship words; never empties it."""
+    i = 0
+    while i < len(words) - 1 and words[i] in _HONORIFICS:
+        i += 1
+    return words[i:]
+
+
+def requested_persons(request: str) -> list:
+    """Word lists of the people the request names ("đến anh Vinh" -> [["vinh"]]).
+    Empty when none is recognisable, e.g. a request typed all in lowercase."""
+    tokens = re.findall(r"\w+", unicodedata.normalize("NFC", request or ""))
+    persons, i = [], 0
+    while i < len(tokens):
+        if tokens[i].casefold() in _PERSON_MARKERS:
+            j = i + 1
+            while (j < len(tokens) and j - i <= 4 and tokens[j][:1].isupper()
+                   and not is_ui_label(tokens[j])):
+                j += 1
+            core = _core_words([t.casefold() for t in tokens[i + 1:j]])
+            if core and core[0] not in _HONORIFICS:
+                persons.append(core)
+                i = j
+                continue
+        i += 1
+    return persons
+
+
+def name_matches_request(keyword: str, request: str) -> bool:
+    """Is the name the model chose one of the people the user asked for? Accents
+    count unless the user typed the whole request without them."""
+    persons = requested_persons(request)
+    if not persons:
+        return True
+    typed_with_accents = any(w != _norm(w) for w in _words(request))
+    fold = (lambda w: w) if typed_with_accents else _norm
+    core = [fold(w) for w in _core_words(_words(keyword))]
+    for person in persons:
+        wanted = [fold(w) for w in person]
+        if _seq_at(wanted, core) >= 0 or _seq_at(core, wanted) >= 0:
+            return True
+    return False
+
+
+def namesakes(keyword: str, request: str, items: list, chosen: str) -> list:
+    """Other people on screen sharing the core of a name the model inferred (the
+    user said "anh Vinh", the model chose "A Vinh", "Vinh Kế toán" is also listed).
+    Nothing to disambiguate when the user wrote the keyword literally."""
+    words = _words(keyword)
+    if _seq_at(words, _words(request)) >= 0:
+        return []
+    core = [_norm(w) for w in _core_words(words)]
+    same = {"".join(words), "".join(_words(chosen))}
+    found = []
+    for item in items or []:
+        text = item.get("text", "")
+        text_words = _words(text)
+        if (text[:1].isupper() and len(text_words) <= 6
+                and not any(c in text for c in ":@,?!")
+                and "".join(text_words) not in same
+                and _seq_at(core, [_norm(w) for w in text_words]) >= 0):
+            found.append(item)
+    return found
+
+
 def is_proper_name(keyword: str, request: str, target: str = "") -> bool:
     """Does this tap keyword name a person/group? Then it needs strict matching.
     True for a non-UI-label keyword that is taken from the user's request and
@@ -221,7 +298,8 @@ def is_proper_name(keyword: str, request: str, target: str = "") -> bool:
     # Accent-blind on purpose: this only decides whether to apply the strict check,
     # and the user may have typed "truong" for "Trường".
     in_request = (_seq_at(words, request_words) >= 0
-                  or _seq_at([_norm(w) for w in words], [_norm(w) for w in request_words]) >= 0)
+                  or _seq_at([_norm(w) for w in _core_words(words)],
+                             [_norm(w) for w in request_words]) >= 0)
     target_words = _words(target)
     person_cue = any(_seq_at(_words(cue), target_words) >= 0 for cue in _PERSON_CUES)
     return (capitalised and in_request) or (person_cue and (capitalised or in_request))

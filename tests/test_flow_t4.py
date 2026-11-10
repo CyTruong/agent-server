@@ -180,19 +180,27 @@ def tars_runner(monkeypatch, point, before=True):
     return tr
 
 
-def test_tars_runs_before_ocr(monkeypatch):
+def test_tars_runs_first_for_a_target_without_text(monkeypatch):
     async def go():
         tr = tars_runner(monkeypatch, (10, 12))
-        result = await tr._tap("t", {"target": "nút Gửi", "keywords": ["Gửi"]})
+        result = await tr._tap("t", {"target": "icon gọi video", "keywords": []})
         assert "ui-tars" in result and tr.relay.calls[0][1]["x"] == 10
     asyncio.run(go())
 
 
-def test_ocr_takes_over_when_tars_has_no_answer(monkeypatch):
+def test_ocr_runs_first_for_a_target_with_text(monkeypatch):
     async def go():
-        tr = tars_runner(monkeypatch, None)
+        tr = tars_runner(monkeypatch, (10, 12))
         result = await tr._tap("t", {"target": "nút Gửi", "keywords": ["Gửi"]})
-        assert tr.tars_called and "OCR-exact" in result
+        assert "OCR-exact" in result and not tr.tars_called
+    asyncio.run(go())
+
+
+def test_tars_is_the_fallback_when_ocr_finds_no_text(monkeypatch):
+    async def go():
+        tr = tars_runner(monkeypatch, (10, 12))
+        result = await tr._tap("t", {"target": "nút Đính kèm", "keywords": ["Đính kèm"]})
+        assert tr.tars_called and "ui-tars" in result
     asyncio.run(go())
 
 
@@ -224,9 +232,13 @@ def test_tars_point_outside_the_anchor_region_is_refused(monkeypatch):
 
         async def wrong(*a, **k):
             return 120, 80
+
+        async def none(*a, **k):
+            return None
         tr._tars_ground = wrong
-        await tr._tap("t", dict(ZALO_TAP))
-        assert tr.relay.calls == [("click", {"x": 500, "y": 570, "button": 1})]
+        tr._uia_marks = tr._tap_marks = tr._locate = none
+        await tr._tap("t", {**ZALO_TAP, "keywords": []})
+        assert tr.relay.calls == []
     asyncio.run(go())
 
 

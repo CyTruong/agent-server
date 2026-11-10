@@ -61,6 +61,7 @@ class TaskRunner(GroundingMixin):
         self._ocr_cache_at = 0.0
         self._ocr_cache_items: list[dict] | None = None
         self._executed_steps: list[dict] = []
+        self._approved_names: set[str] = set()   # confirmed by the user in this task
         self._task_text = ""                     # current request (for refine prompt)
         # Mapping from the model's image-space coords to real screen pixels,
         # learned from the last screenshot (image size vs reported screen size).
@@ -181,6 +182,7 @@ class TaskRunner(GroundingMixin):
         sys_prompt, skill_names = build_system_prompt(text)
         self._task_text = text
         self._executed_steps = []
+        self._approved_names = set()
         messages = [{"role": "system", "content": sys_prompt},
                     {"role": "user", "content": text + NT}]
         cache_match = self.task_cache.retrieve(text, skill_names)

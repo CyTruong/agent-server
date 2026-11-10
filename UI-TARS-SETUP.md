@@ -55,11 +55,10 @@ Mở ảnh debug `..._tap_....png` xem **chấm đỏ** có nằm đúng phần 
 
 1. Kiểm tra **tên người** bằng OCR (UI-TARS chỉ trả toạ độ, không phân biệt được tên).
 2. `_uia_find` — UIA theo tên/loại (toạ độ native, chính xác tuyệt đối).
-3. **`_tars_ground`** — UI-TARS nhìn ảnh → toạ độ. Điểm nằm ngoài vùng của mốc bị bỏ.
-4. **OCR-exact** — khớp chữ OCR rất chắc (>= `OCR_EXACT_MIN`, mặc định 0.9).
+3. Phần tử **không có keywords**: `_tars_ground` — UI-TARS nhìn ảnh → toạ độ.
+4. Phần tử **có keywords**: **OCR-exact** (>= `OCR_EXACT_MIN`, mặc định 0.9), không khớp
+   thì mới hỏi UI-TARS. Điểm UI-TARS nằm ngoài vùng của mốc bị bỏ.
 5. Fallback: UIA-marks → OCR (>=0.8) → marks → lưới 3x3 (qwen).
-
-`UITARS_BEFORE_OCR=false` đưa OCR-exact lên trước UI-TARS như cũ.
 
 Log: `tap '...' [OCR-exact]` (OCR lo) hoặc `tap '...' [ui-tars]` (UI-TARS lo).
 

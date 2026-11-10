@@ -49,15 +49,19 @@ from matching import (
     _sim,
     is_lossy_read,
     is_proper_name,
+    is_ui_label,
     name_match,
+    name_matches_request,
     name_rank,
+    namesakes,
     resolve_name,
     NameResolution,
 )
 from relay_client import new_request_id
 
 # Where Zalo's chat header sits, as a fraction of the screen. A name outside it (for
-# example a row of the chat list) does not prove which conversation is open.
+# example a row of the chat list) does not prove which conversation is open, and
+# the chat list column ends where the header begins.
 ZALO_HEADER_MIN_X = 0.22
 ZALO_HEADER_MAX_Y = 0.18
 
@@ -733,13 +737,35 @@ class GroundingMixin:
             return round(ix * self._scr_w / self._img_w), round(iy * self._scr_h / self._img_h)
         return ix, iy
 
+    def _is_zalo_task(self) -> bool:
+        return "zalo" in self._task_text.lower()
+
+    def _area_pool(self, items, area: str) -> list:
+        """OCR boxes inside `area`. Zalo's "left" is strictly the chat list column:
+        the header name is also left of the middle but is not a list row."""
+        W, H = self._img_w, self._img_h
+        pool = list(items or [])
+        if area == "left" and self._is_zalo_task():
+            return [it for it in pool if it["cx"] < W * ZALO_HEADER_MIN_X]
+        if area and area != "any":
+            pool = [it for it in pool if _in_area(it, area, W, H)] or pool
+        return pool
+
+    def _zalo_header(self, items) -> list:
+        return [it for it in items or []
+                if it["cx"] >= self._img_w * ZALO_HEADER_MIN_X
+                and it["cy"] <= self._img_h * ZALO_HEADER_MAX_Y]
+
+    def _namesakes(self, names: list, pool: list, chosen: str) -> list:
+        if all(n in self._approved_names for n in names):
+            return []
+        return [b for n in names for b in namesakes(n, self._task_text, pool, chosen)]
+
     def _resolve_on_screen(self, names: list, items, area: str, relation: str = ""):
         """resolve_name over the OCR boxes, in-area and nearest-centre first. With
         below/bottom_of the box is an anchor heading a panel: top-most first."""
         W, H = self._img_w, self._img_h
-        pool = list(items or [])
-        if area and area != "any":
-            pool = [it for it in pool if _in_area(it, area, W, H)] or pool
+        pool = self._area_pool(items, area)
         if relation in ("below", "bottom_of"):
             pool.sort(key=lambda it: it["cy"])
         else:
@@ -750,11 +776,9 @@ class GroundingMixin:
         """OCR boxes allowed to serve as a named anchor. In Zalo the box above the
         message input must be the chat header, so that a stale open conversation
         is not accepted because the name also appears in the list."""
-        if relation != "bottom_of" or "zalo" not in self._task_text.lower():
+        if relation != "bottom_of" or not self._is_zalo_task():
             return items or []
-        return [it for it in items or []
-                if it["cx"] >= self._img_w * ZALO_HEADER_MIN_X
-                and it["cy"] <= self._img_h * ZALO_HEADER_MAX_Y]
+        return self._zalo_header(items)
 
     def _name_crop(self, box: dict):
         """PNG of one OCR box from the current frame, enlarged; None on failure."""
@@ -869,6 +893,7 @@ class GroundingMixin:
             task_id, "tap", {"target": target, "chosen": best},
             message=f"Không chắc tên cho '{target}'. Trên màn hình thấy: {seen}. Bấm vào '{best}'?")
         if ok:
+            self._approved_names.add(res.box["text"])
             return ""
         return (f"error: người dùng không xác nhận '{best}' (thấy: {seen}). ĐỪNG bấm hay gửi "
                 "cho người khác; hãy hỏi lại người dùng đúng tên.")
@@ -903,14 +928,40 @@ class GroundingMixin:
         # paths below cannot tell "Trường" from "Tường". Certain -> click; unsure
         # -> ask; not readable -> carry on, but ask before the final click.
         names = [k for k in kws if is_proper_name(k, self._task_text, target)]
-        anchor_names = [k for k in anchor_kws if is_proper_name(k, self._task_text, target)]
+        # In Zalo the anchor of the message input is by definition the recipient,
+        # even if the request words it differently ("anh Vinh" vs "A Vinh").
+        zalo_input = relation == "bottom_of" and self._is_zalo_task()
+        anchor_names = [k for k in anchor_kws if is_proper_name(k, self._task_text, target)
+                        or (zalo_input and not is_ui_label(k))]
+        suspect = [k for k in names + anchor_names if k not in self._approved_names
+                   and not name_matches_request(k, self._task_text)]
+        if suspect:
+            ok = await self._ask_confirm(
+                task_id, "tap", {"target": target, "names": suspect},
+                message=f"Yêu cầu là '{self._task_text}' nhưng sắp thao tác với {suspect}. "
+                        "Có đúng người không?")
+            if not ok:
+                return (f"error: người dùng không xác nhận {suspect} là người được yêu cầu. "
+                        "ĐỪNG bấm hay gửi; hãy hỏi lại đúng tên.")
+            self._approved_names.update(suspect)
         items, unverified = None, ""
         pt, how, region, ctx = None, "", None, ""
         if (names or anchor_names) and OCR_ENABLE:
             items = await self._ocr_items(task_id)
+        if names and area == "left" and self._is_zalo_task():
+            header = resolve_name(names, self._zalo_header(items))
+            if header.status == "certain" and not self._namesakes(
+                    names, self._area_pool(items, area), header.box["text"]):
+                log(f"[{task_id}] khung '{header.box['text']}' đã mở sẵn -> không bấm")
+                return (f"ok: khung trò chuyện với '{header.box['text']}' đã mở sẵn (tên ở đầu "
+                        "khung khớp), không cần bấm. Làm tiếp bước sau.")
         if names:
             res = await self._reread_names(
                 task_id, names, self._resolve_on_screen(names, items, area))
+            if res.box:
+                others = self._namesakes(names, self._area_pool(items, area), res.box["text"])
+                if others:
+                    res = NameResolution("uncertain", res.box, [res.box] + others)
             log(f"[{task_id}] tên {names}: {res.status}"
                 + (f" -> '{res.box['text']}'" if res.box else ""))
             if res.box:
@@ -985,8 +1036,10 @@ class GroundingMixin:
             else:   # anchor not read by OCR: still tell the model where to look
                 ctx = f"(phần tử nằm {rel_vi} chữ '{anchor_kws[0]}')"
 
-        # (B) UI-TARS grounding, by default ahead of the OCR keyword match.
-        if pt is None and UITARS_BEFORE_OCR:
+        # (B) UI-TARS first only for text-less targets: each call costs a model swap
+        # (~15 s), and OCR is as accurate and instant when there is text to match.
+        tars_first = UITARS_BEFORE_OCR and not kws
+        if pt is None and tars_first:
             tapped = await self._tap_with_tars(task_id, target, area, anchor_kws, region, unverified)
             if tapped:
                 return tapped
@@ -998,7 +1051,7 @@ class GroundingMixin:
             if ex:
                 pt, how = ex, "OCR-exact"
 
-        if pt is None and not UITARS_BEFORE_OCR:
+        if pt is None and not tars_first:
             tapped = await self._tap_with_tars(task_id, target, area, anchor_kws, region, unverified)
             if tapped:
                 return tapped

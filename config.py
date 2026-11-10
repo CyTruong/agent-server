@@ -76,8 +76,9 @@ UITARS_FULLRES = os.environ.get("UITARS_FULLRES", "false").lower() in ("1", "tru
 # 'norm1000' = 0..1000 normalised, 'auto' = guess (>1000 -> image, else norm1000).
 # Calibrate once from the 'tars raw=... -> screen' log, then pin it explicitly.
 UITARS_COORD = os.environ.get("UITARS_COORD", "auto").lower()
-# Ask UI-TARS before the OCR keyword match. Checking people's names by OCR still
-# comes first: UI-TARS returns only a point and cannot tell two names apart.
+# For a target with no text keywords, ask UI-TARS before the other vision layers.
+# Targets with keywords always try OCR first. Checking people's names by OCR comes
+# before all of it: UI-TARS returns only a point and cannot tell two names apart.
 UITARS_BEFORE_OCR = os.environ.get("UITARS_BEFORE_OCR", "true").lower() in ("1", "true", "yes")
 # Plan-and-execute: for a multi-step request, make one text-only LLM call first to
 # decompose it into a numbered step list, then keep that list in context as a
