@@ -9,7 +9,7 @@ Backends (OCR_BACKEND env): "auto" (default: EasyOCR, else PaddleOCR), "easyocr"
 or "paddle". EasyOCR comes first because it keeps Vietnamese accents; PaddleOCR
 2.x reads Vietnamese with its latin model and drops most of them ("Trường" ->
 "Trudng"), which makes every name check ask the user. Install:
-    pip install torch --index-url https://download.pytorch.org/whl/cpu   # small CPU build
+    pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu  # a matched pair
     pip install easyocr
     pip install "paddleocr>=2.7,<3.0" "paddlepaddle>=2.6"   # optional fallback
 Both run on CPU (gpu off) so they never compete with Ollama for VRAM. If no
@@ -18,21 +18,35 @@ The engine is loaded once and reused.
 """
 import os
 import threading
+import time
 
 _engine = None
 _kind = None
 _tried = False
+_tried_at = 0.0
+_error = ""          # why the last load failed, shown in the task log
+# A failed load is retried after this long, so installing a package (or getting
+# the model download through) works without restarting the agent.
+RETRY_SECONDS = 300
 # The engines are not thread-safe; a cancelled task's OCR can still be running.
 _lock = threading.Lock()
 
 
+def load_error() -> str:
+    """Why no OCR engine is available ("" if one is, or none was tried yet)."""
+    return _error
+
+
 def _load(lang: str):
-    global _engine, _kind, _tried
-    if _tried:
+    global _engine, _kind, _tried, _tried_at, _error
+    if _engine is not None:
         return _kind, _engine
-    _tried = True
+    if _tried and time.monotonic() - _tried_at < RETRY_SECONDS:
+        return None, None
+    _tried, _tried_at = True, time.monotonic()
     backend = os.environ.get("OCR_BACKEND", "auto").lower()
     order = {"easyocr": ("easyocr",), "paddle": ("paddle",)}.get(backend, ("easyocr", "paddle"))
+    errors = []
 
     for kind in order:
         try:
@@ -47,12 +61,14 @@ def _load(lang: str):
                 # use_angle_cls off: screen text is upright; faster.
                 _engine = PaddleOCR(use_angle_cls=False, lang=lang, show_log=False)
                 print("[ocr] backend: PaddleOCR", flush=True)
-            _kind = kind
+            _kind, _error = kind, ""
             return _kind, _engine
         except Exception as e:  # noqa: BLE001 - not installed / init error
-            print(f"[ocr] {kind} unavailable: {e}", flush=True)
+            errors.append(f"{kind}: {type(e).__name__}: {e}")
+            print(f"[ocr] {kind} unavailable: {type(e).__name__}: {e}", flush=True)
 
     _engine, _kind = None, None
+    _error = "; ".join(errors)
     return _kind, _engine
 
 

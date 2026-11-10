@@ -53,6 +53,19 @@ def test_backend_choice(monkeypatch, engines, setting, easy, paddle, expected):
     assert ocr._load("vi")[0] == expected
 
 
+def test_failure_reason_is_kept_and_load_is_retried_later(monkeypatch, engines):
+    engines(easy=False, paddle=False)
+    monkeypatch.setenv("OCR_BACKEND", "auto")
+    assert ocr._load("vi") == (None, None)
+    assert "easyocr" in ocr.load_error() and "paddle" in ocr.load_error()
+    engines(easy=True, paddle=False)
+    monkeypatch.setattr(ocr, "_tried", True)
+    monkeypatch.setattr(ocr, "_tried_at", ocr.time.monotonic())
+    assert ocr._load("vi") == (None, None)          # too soon to retry
+    monkeypatch.setattr(ocr, "_tried_at", ocr.time.monotonic() - ocr.RETRY_SECONDS - 1)
+    assert ocr._load("vi")[0] == "easyocr" and ocr.load_error() == ""
+
+
 def test_easyocr_runs_on_cpu_with_vietnamese_and_english(monkeypatch, engines):
     engines()
     monkeypatch.setenv("OCR_BACKEND", "auto")

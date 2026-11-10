@@ -7,7 +7,7 @@ import skill_select
 from tools import is_dangerous
 
 ALL = {"overview", "open-file", "find-file", "close-file", "read-file", "create-file", "edit-file",
-       "view"}
+       "view", "find-related"}
 # Keys the PC agent (Resolve-KeyToken) can press as the last key of a combo.
 _LAST_KEY = r"([a-z0-9]|f([1-9]|1[0-2])|enter|tab|esc|home|end|up|down|left|right)"
 _COMBO = re.compile(rf"((ctrl|alt|shift|win)\+)*{_LAST_KEY}")
@@ -57,9 +57,9 @@ def test_all_skills_exist():
 def test_prompt_with_every_action_stays_manageable():
     prompt, _ = skill_select.build_system_prompt(
         "tìm mở đọc sửa tạo mới rồi đóng file word")
-    # Only a request naming every action loads all eight skills; a typical edit
-    # request stays near 16k characters.
-    assert len(prompt) < 19000
+    # Only a request naming every action loads all nine skills; a typical edit
+    # request stays near 18k characters (see test_word_flow_t5).
+    assert len(prompt) < 21500
 
 
 def test_hotkeys_named_in_word_skills_are_known():

@@ -9,8 +9,19 @@
 
 ## Đưa con trỏ tới chỗ cần sửa (KHÔNG cuộn chuột để tìm)
 - Cuối tài liệu `hotkey ctrl+end`; đầu tài liệu `hotkey ctrl+home`.
-- Tới một dòng: `hotkey ctrl+f` → `type <vài chữ của dòng đó>` → `key enter` → `key esc`
-  (chữ tìm được đang được chọn) → `key end` (cuối dòng) hoặc `key home` (đầu dòng).
+- Theo nội dung (ô tìm của Word không phân biệt hoa/thường):
+  1. `hotkey ctrl+f` → `hotkey ctrl+a` (xoá chữ tìm cũ) → `type <cụm chữ nguyên văn>`
+     → `screenshot`. Ngăn Dẫn hướng bên trái ghi số kết quả; chỗ khớp được tô màu.
+  2. Có kết quả → `key enter` → `screenshot` xác nhận đúng nội dung → `key esc` (chữ
+     tìm được đang được chọn) → `key end` (cuối dòng) hoặc `key home` (đầu dòng).
+  3. Báo "Không có kết quả / No results": chọn 2–3 TỪ KHÓA đặc trưng nhất của nội dung
+     đó (tên riêng, số liệu, thuật ngữ; bỏ từ chung như "của", "và", "mục", "phần").
+     Với từng từ khóa: `hotkey ctrl+a` → `type <từ khóa>` → `screenshot`; mỗi lần
+     `key enter` nhảy tới chỗ khớp kế tiếp → `screenshot` đọc đoạn quanh đó, xem có
+     ĐÚNG nội dung người dùng nói không. Tối đa 3 từ khóa, mỗi từ khóa 3 chỗ khớp.
+  4. Thấy đúng chỗ → `key esc` rồi sửa. Nhiều chỗ đều có thể đúng → `ask_user`, mỗi
+     chỗ một lựa chọn (vài chữ quanh chỗ đó).
+  5. Không chỗ nào khớp → `key esc` → làm theo skill **tìm nội dung liên quan**.
 
 ## Thay hoặc xoá một đoạn chữ
 1. `hotkey ctrl+h` → `screenshot` thấy hộp Tìm và Thay thế, con trỏ ở ô Tìm.

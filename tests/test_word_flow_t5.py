@@ -63,7 +63,14 @@ def test_document_words_with_another_app_do_not(text):
 
 def test_prompt_with_every_word_action_stays_bounded():
     prompt, _ = skills("tìm mở đọc sửa tạo mới rồi đóng file word, chỉnh giao diện")
-    assert len(prompt) < 19000
+    assert len(prompt) < 21500
+
+
+def test_typical_edit_prompt_stays_bounded():
+    # Raise only on purpose: ~18k characters is already about 6k tokens of the
+    # model's context before any screenshot.
+    prompt, _ = skills(T5, carry=("word",))
+    assert len(prompt) < 18500
 
 
 # --- stuck detection -------------------------------------------------------------
@@ -130,3 +137,14 @@ def test_scrolling_that_moves_the_page_is_not_stuck(monkeypatch):
     tr, _ = run_scrolls(monkeypatch, moving=True, steps=6)
     final = tr.relay.final()[-1]["result"]
     assert final.startswith("Đạt giới hạn 6 bước") and "Các bước cuối" in final
+
+
+def test_editing_brings_the_find_related_fallback():
+    prompt, names = skills("sửa đoạn cam kết trong file word")
+    assert {"word/edit-file", "word/find-related"} <= set(names)
+    assert "Không có kết quả" in prompt and "vừa đọc vừa tìm" in prompt
+
+
+def test_describing_content_loads_find_related():
+    names = skills("tìm đoạn nói về ngân sách trong file word")[1]
+    assert "word/find-related" in names

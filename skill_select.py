@@ -138,12 +138,15 @@ SKILL_KEYWORDS = {
     "word/view":        ["giao diện", "hiển thị", "chế độ xem", "chế độ đọc", "một trang",
                          "hai trang", "bốn trang", "nhiều trang", "trang đôi", "trang đơn",
                          "sang đơn", "phóng to", "thu nhỏ", "zoom", "cuộn ngang", "dàn trang"],
+    "word/find-related": ["tìm đoạn", "tìm chỗ", "tìm mục", "đoạn nói về", "phần nói về",
+                          "nói về", "liên quan", "chỗ nào", "mục nào", "đoạn nào"],
 }
 
 # Loaded together with the skill on the left.
 SKILL_DEPENDS = {
     "word/read-file": ("word/view",),
-    "word/edit-file": ("word/view",),
+    # find-related is edit-file's fallback when ctrl+f and keywords find nothing.
+    "word/edit-file": ("word/view", "word/find-related"),
 }
 # A follow-up whose app was carried over but whose words match no action skill
 # ("cái đó thì sao") gets these.

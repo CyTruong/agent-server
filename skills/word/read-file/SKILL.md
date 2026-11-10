@@ -6,7 +6,7 @@
    Thấy 2+ trang cạnh nhau hoặc cuộn bị chạy ngang → skill điều chỉnh hiển thị trước.
 3. Trên ảnh đó, `move` con trỏ vào giữa trang (KHÔNG bấm, tránh làm đổi vị trí con
    trỏ gõ). Chỉ cần `move` một lần.
-4. Lặp: `scroll` amount **âm** (vd -8) → `screenshot` → đọc tiếp. Dừng khi đã hết trang
+4. Lặp: `scroll` amount **âm** (vd -16) → `screenshot` → đọc tiếp. Dừng khi đã hết trang
    hoặc đủ thông tin. Ảnh KHÔNG đổi sau khi cuộn = đã hết tài liệu (hoặc chuột không ở
    trên trang): dừng cuộn, không lặp lại.
 5. Trả lời đúng điều người dùng hỏi, chỉ dựa trên những gì THẤY trên ảnh.
