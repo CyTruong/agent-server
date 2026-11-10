@@ -72,6 +72,20 @@ def crop_image(image: bytes, box: tuple):
         return None
 
 
+def upscale(image: bytes, factor: int = 2) -> bytes:
+    """The image enlarged (PNG) so OCR can read small text; the input on failure."""
+    try:
+        from io import BytesIO
+        from PIL import Image
+        im = Image.open(BytesIO(image)).convert("RGB")
+        im = im.resize((im.width * factor, im.height * factor), Image.LANCZOS)
+        out = BytesIO()
+        im.save(out, format="PNG")
+        return out.getvalue()
+    except Exception:  # noqa: BLE001
+        return image
+
+
 def prune_images(messages: list, keep: int) -> int:
     """Drop images from all but the newest `keep` messages that carry one, in
     place, leaving a text note. Returns how many were dropped."""

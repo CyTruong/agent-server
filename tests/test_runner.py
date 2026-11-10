@@ -37,6 +37,9 @@ class FakeRelay:
 def make_runner(monkeypatch, relay=None):
     monkeypatch.setattr(runner, "CACHE_ENABLED", False)
     monkeypatch.setattr(runner, "PLAN_ENABLE", False)
+    # Transcribing pages would spend the scripted LLM replies; tests that cover it
+    # switch it back on.
+    monkeypatch.setattr(runner, "READ_NOTES", "ocr")
     return runner.TaskRunner(relay or FakeRelay())
 
 

@@ -132,6 +132,15 @@ STUCK_LIMIT = int(os.environ.get("STUCK_LIMIT", "3"))
 # Capture small screen regions at native resolution (needs the matching firmware
 # and PC agent; falls back to cropping the full screenshot when they are older).
 NATIVE_CAPTURE = os.environ.get("NATIVE_CAPTURE", "true").lower() in ("1", "true", "yes")
+# How a page read while reading a document/chat is kept in the conversation
+# (screenshots are pruned, text is not):
+#   model - the vision model transcribes each page (one extra LLM call per page)
+#   ocr   - the OCR text of each page
+#   both  - OCR decides whether a page has anything new (cheap, stable); the
+#           model transcribes the pages that do. Default.
+READ_NOTES = os.environ.get("READ_NOTES", "both").lower()
+# Above this many characters of page notes, the model condenses them.
+NOTES_MAX_CHARS = int(os.environ.get("NOTES_MAX_CHARS", "6000"))
 SCREEN_CACHE_TTL = float(os.environ.get("SCREEN_CACHE_TTL_SECONDS", "6.0"))
 OCR_CACHE_TTL = float(os.environ.get("OCR_CACHE_TTL_SECONDS", "6.0"))
 SCREEN_MUTATING_TOOLS = frozenset({

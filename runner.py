@@ -2,6 +2,7 @@
 import asyncio
 import contextlib
 import hashlib
+import re
 import time
 import traceback
 
@@ -27,11 +28,13 @@ from config import (
     MAX_RETRIES,
     MAX_STEPS,
     MODEL,
+    NOTES_MAX_CHARS,
     NT,
     NUM_CTX,
     OCR_ENABLE,
     OCR_LANG,
     PLAN_ENABLE,
+    READ_NOTES,
     SCREEN_CACHE_TTL,
     SCREEN_MUTATING_TOOLS,
     SEARCH_ENABLE,
@@ -40,8 +43,8 @@ from config import (
     THINK,
 )
 from grounding import GroundingMixin
-from imaging import annotate_grid, crop_image, image_size, prune_images
-from progress import ProgressWatch
+from imaging import annotate_grid, crop_image, image_size, prune_images, upscale
+from progress import ProgressWatch, ReadingTracker
 from regions import ZOOM_AREAS, fraction_box, image_box_to_screen, ocr_lines
 from intents import (
     _is_ask_or_blocked,
@@ -54,6 +57,24 @@ from relay_client import RelayClient, new_request_id
 from skill_select import build_system_prompt, gated_groups
 from task_cache import TaskCache, is_verified_workflow
 from tools import TOOLS, TOOL_NAMES, is_dangerous, split_for_type
+
+
+MODEL_NOTE_HEAD = "Ghi chú trang này (model chép lại)"
+OCR_NOTE_HEAD = "Chữ MỚI trên trang này (OCR, có thể sai chính tả)"
+SUMMARY_HEAD = "Ghi chú tổng hợp các trang đã đọc (đã tóm gọn):"
+
+# Skills that read page by page; their screenshots get the page text attached.
+READING_SKILLS = ("word/read-file", "word/find-related", "zalo/read-chat",
+                  "facebook/browse-feed")
+
+
+def _file_key(text: str) -> str:
+    """Lowercase letters/digits only, accents removed: compares file names with
+    window titles regardless of "-", "_", spaces or OCR dropping accents."""
+    import unicodedata
+    text = unicodedata.normalize("NFKD", (text or "").replace("đ", "d").replace("Đ", "D"))
+    text = "".join(c for c in text if not unicodedata.combining(c)).lower()
+    return re.sub(r"[^a-z0-9]+", "", text)
 
 
 # Typed alone as a chat message, these clear the device's context.
@@ -100,6 +121,9 @@ class TaskRunner(GroundingMixin):
         self._search_open = False   # Windows Search opened, results not looked at yet
         self._pending_note = None   # caption for _pending_image when it is not a screenshot
         self._shot_size = (0, 0)    # size of the last full screenshot (kept for zoom boxes)
+        self._notes_chars = 0       # characters of page notes kept in this task
+        self._notes_recent: list[str] = []   # last noted lines, so a page is not copied twice
+        self._note_dedupe = None    # drops lines the model already transcribed
         self._stuck_warned = False  # the task changed nothing on screen at some point
 
     async def _ui(self, msg: dict):
@@ -292,6 +316,12 @@ class TaskRunner(GroundingMixin):
         deliver_nudges = 0 # times we pushed it to finish the "send" part
         send_checked = False  # already forced a screenshot after the send?
         watch = ProgressWatch(STUCK_LIMIT)   # actions that change nothing on screen
+        # Reading a document or chat page by page: keep each page's text in the
+        # conversation and stop once moving shows nothing new.
+        reader = ReadingTracker() if any(n in READING_SKILLS for n in skill_names) else None
+        self._notes_chars, self._notes_recent = 0, []
+        self._note_dedupe = ReadingTracker()
+        force_answer = False
         needs_deliver = _needs_delivery(text) and await self._requires_delivery(task_id, text)
 
         # Plan-and-execute: decompose a multi-step request first, keep it as a
@@ -315,7 +345,7 @@ class TaskRunner(GroundingMixin):
                 dump_messages(task_id, messages)
                 t0 = time.monotonic()
                 resp = await llm.chat(model=MODEL, messages=messages,
-                                      tools=TOOLS, think=THINK,
+                                      tools=None if force_answer else TOOLS, think=THINK,
                                       options={"num_ctx": NUM_CTX})
                 dt = time.monotonic() - t0
             except asyncio.TimeoutError:
@@ -417,12 +447,20 @@ class TaskRunner(GroundingMixin):
                     pass
                 elif name in SCREEN_MUTATING_TOOLS:
                     watch.action(name)
+                    if reader:
+                        reader.action(name)
                 elif name == "screenshot" and self._raw_frame:
                     warning = watch.screenshot(self._raw_frame)
                     if warning:
                         self._stuck_warned = True
                         log(f"[{task_id}] màn hình không đổi ({watch.stuck}/{STUCK_LIMIT})")
                         result = f"{result} {warning}"
+                    if reader:
+                        note, done_reading = await self._reading_note(task_id, reader)
+                        result = f"{result}{note}"
+                        if done_reading and not force_answer:
+                            force_answer = True
+                            log(f"[{task_id}] đã đọc hết (không còn chữ mới) -> buộc trả lời")
                 log(f"[{task_id}] step {step}: {name} => {result[:120]}")
                 self._executed_steps.append({
                     "tool": name,
@@ -447,6 +485,14 @@ class TaskRunner(GroundingMixin):
                                      "images": [self._pending_image]})
                     self._pending_image = None
                     self._pending_note = None
+                if reader and self._notes_chars > NOTES_MAX_CHARS:
+                    await self._compress_notes(task_id, messages)
+
+            if force_answer and calls:
+                messages.append({"role": "user", "content":
+                    "Đã đọc HẾT tài liệu: các trang cuối không còn chữ mới. KHÔNG cuộn hay mở "
+                    "lại. Viết câu trả lời cuối NGAY bây giờ, dựa trên TẤT CẢ ghi chú các trang "
+                    "đã ghi ở trên (và 'Ghi chú tổng hợp' nếu có), theo đúng thứ tự." + NT})
 
             if watch.exhausted:
                 log(f"[{task_id}] dừng: màn hình không đổi {watch.stuck} lần liên tiếp")
@@ -474,6 +520,10 @@ class TaskRunner(GroundingMixin):
             self._search_open = False
             return await self._screenshot(task_id, force=True, attach=True)
         if name == "hotkey" and str(args.get("combo", "")).lower().replace(" ", "") == "win+s":
+            opened = await self._already_open(task_id)
+            if opened:
+                return (f"error: KHÔNG mở lại: thanh tiêu đề đang là '{opened}', file cần dùng ĐÃ MỞ. "
+                        "Làm tiếp việc đọc/sửa ngay trên cửa sổ này.")
             self._search_open = True
         if (name == "key" and self._search_open
                 and str(args.get("name", "")).lower() == "enter"):
@@ -684,7 +734,7 @@ class TaskRunner(GroundingMixin):
         if OCR_ENABLE:
             try:
                 items = await asyncio.get_running_loop().run_in_executor(
-                    None, ocr.run_ocr, image, OCR_LANG)
+                    None, ocr.run_ocr, image if native else upscale(image), OCR_LANG)
                 text = ocr_lines(items) if items else ""
             except Exception as e:  # noqa: BLE001
                 log(f"[{task_id}] zoom OCR lỗi: {e}")
@@ -697,6 +747,173 @@ class TaskRunner(GroundingMixin):
                               "đọc được ở đây.")
         return (f"ok: đã chụp vùng {label} ({how}), ảnh ở lượt sau."
                 + (f" Chữ trong vùng:\n{text}" if text else " OCR không đọc được chữ nào."))
+
+    def _wanted_files(self) -> list[str]:
+        """Comparable keys of the file names in this request and the recent ones
+        ("Ho-so-du-an.docx" -> "hosoduan"): names with - or _ or a Word extension."""
+        texts = [self._task_text] + [h["request"] for h in self._recent_history()]
+        keys = []
+        for text in texts:
+            for token in re.findall(r"[\w.\-]{6,}", text or ""):
+                low = token.lower()
+                if "-" in low or "_" in low or low.endswith((".docx", ".doc")):
+                    key = _file_key(re.sub(r"\.docx?$", "", low))
+                    if len(key) >= 6 and key not in keys:
+                        keys.append(key)
+        return keys
+
+    async def _already_open(self, task_id: str) -> str:
+        """The window title when it shows the Word file this task is about (so it
+        must not be searched for and opened again), else ""."""
+        if "word" not in self._task_groups:
+            return ""
+        wanted = self._wanted_files()
+        screen_w, screen_h = self.relay.frame_sw, self.relay.frame_sh
+        if not (wanted and screen_w and OCR_ENABLE):
+            return ""
+        x, y, w, h = fraction_box(ZOOM_AREAS["title"], screen_w, screen_h)
+        image, _scale, native = await self._capture_region(task_id, x, y, w, h)
+        if image is None:
+            return ""
+        try:
+            items = await asyncio.get_running_loop().run_in_executor(
+                None, ocr.run_ocr, image if native else upscale(image), OCR_LANG)
+        except Exception as e:  # noqa: BLE001
+            log(f"[{task_id}] đọc thanh tiêu đề lỗi: {e}")
+            return ""
+        title = " ".join(it["text"] for it in items or [])
+        title_key = _file_key(title)
+        for key in wanted:
+            if key in title_key or (len(key) > 20 and key[:20] in title_key):
+                log(f"[{task_id}] file đã mở ('{title[:60]}') -> chặn mở lại")
+                return title[:80]
+        return ""
+
+    async def _reading_note(self, task_id: str, reader) -> tuple[str, bool]:
+        """Note what the page just captured says, appended to the screenshot's tool
+        result (text is never pruned from the conversation, unlike screenshots), and
+        tell whether reading has reached the end (twice in a row nothing new after
+        moving). See READ_NOTES."""
+        lines = None
+        if READ_NOTES in ("ocr", "both") and OCR_ENABLE:
+            items = await self._ocr_items(task_id)
+            if items:
+                lines = ocr_lines(items, limit=100000).split("\n")
+        if lines is not None:
+            fresh, nothing_new = reader.page(lines)
+            if nothing_new:
+                return self._end_note(task_id, reader)
+            if READ_NOTES == "ocr":
+                return self._note_block(OCR_NOTE_HEAD, fresh), False
+        if READ_NOTES == "ocr":
+            return "", False                     # OCR unavailable: nothing to note
+        transcript = await self._transcribe_page(task_id)
+        if transcript is None:
+            return "", False                     # the call failed: no verdict either
+        page_lines = [line.strip() for line in transcript.split("\n") if line.strip()]
+        if lines is None:                        # no OCR: the model's text decides
+            fresh, nothing_new = reader.page(page_lines)
+            if nothing_new:
+                return self._end_note(task_id, reader)
+        else:
+            fresh, _ = self._note_dedupe.page(page_lines)
+        return self._note_block(MODEL_NOTE_HEAD, fresh), False
+
+    def _end_note(self, task_id: str, reader) -> tuple[str, bool]:
+        log(f"[{task_id}] trang không có chữ mới ({reader.stale})")
+        return (" KHÔNG có chữ mới so với các trang đã đọc: đã tới CUỐI (hoặc cuộn không tác "
+                "dụng). Đừng cuộn tiếp; trả lời dựa trên ghi chú các trang đã ghi."), \
+            reader.stale >= 2
+
+    def _note_block(self, head: str, lines: list[str]) -> str:
+        if not lines:
+            return " (Trang này không có nội dung mới đáng ghi.)"
+        text = "\n".join(lines)
+        if len(text) > 3000:
+            text = text[:3000] + " …"
+        self._notes_chars += len(text)
+        self._notes_recent = (self._notes_recent + lines)[-15:]
+        return f"\n{head}:\n{text}"
+
+    async def _transcribe_page(self, task_id: str) -> str | None:
+        """The vision model copies the page's text. "" when it finds nothing new,
+        None when the call fails."""
+        if not self._raw_frame:
+            return None
+        tail = "\n".join(self._notes_recent[-8:])
+        prompt = (
+            "Ảnh là màn hình đang mở một tài liệu hoặc cuộc trò chuyện. Chép lại NGUYÊN VĂN "
+            "phần nội dung chính theo đúng thứ tự từ trên xuống: giữ tiêu đề mục, số thứ tự, "
+            "số liệu, tên riêng, đúng dấu tiếng Việt; mỗi đoạn một dòng. Bỏ menu, thanh "
+            "công cụ, thanh tiêu đề. Tin nhắn: ghi 'Họ:' cho bong bóng bên trái, 'Mình:' cho "
+            "bên phải. Không thêm lời bình, không tóm tắt."
+            + (f"\nBỎ QUA các dòng đã chép trước đó (cuối ghi chú):\n{tail}" if tail else "")
+            + "\nNếu không có gì mới, chỉ trả về: KHÔNG CÓ NỘI DUNG MỚI /no_think")
+        t0 = time.monotonic()
+        try:
+            resp = await llm.chat(model=MODEL, think=False, options={"num_ctx": NUM_CTX},
+                                  messages=[{"role": "user", "content": prompt,
+                                             "images": [self._raw_frame]}])
+            text = (resp["message"].get("content") or "").strip()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            log(f"[{task_id}] chép trang lỗi: {e}")
+            return None
+        log(f"[{task_id}] model chép trang: {len(text)} ký tự, {time.monotonic() - t0:.1f}s")
+        if "KHÔNG CÓ NỘI DUNG MỚI" in text.upper():
+            return ""
+        return text[:4000]
+
+    async def _summarize_notes(self, notes: str) -> str:
+        prompt = (f"Tóm gọn ghi chú đọc tài liệu sau còn khoảng {NOTES_MAX_CHARS // 2} ký tự. "
+                  "Giữ đúng thứ tự các mục, tiêu đề, số liệu, tên riêng; bỏ phần lặp. Chỉ trả "
+                  f"về bản tóm gọn.\n\n{notes} /no_think")
+        resp = await llm.chat(model=MODEL, think=False, options={"num_ctx": NUM_CTX},
+                              messages=[{"role": "user", "content": prompt}])
+        return (resp["message"].get("content") or "").strip()
+
+    async def _compress_notes(self, task_id: str, messages: list) -> None:
+        """Replace the page notes collected so far by one condensed summary, so a
+        long document does not overflow the model's context."""
+        holders, parts = [], []
+        for index, message in enumerate(messages):
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content") or ""
+            if message.get("role") == "user" and content.startswith(SUMMARY_HEAD):
+                parts.append(content[len(SUMMARY_HEAD):].strip())
+                holders.append((index, None))
+                continue
+            if message.get("role") != "tool":
+                continue
+            for head in (MODEL_NOTE_HEAD, OCR_NOTE_HEAD):
+                marker = f"\n{head}:"
+                if marker in content:
+                    base, note = content.split(marker, 1)
+                    parts.append(note.strip())
+                    holders.append((index, base))
+                    break
+        if not parts:
+            return
+        try:
+            summary = await self._summarize_notes("\n".join(parts))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 - keep the notes as they are
+            log(f"[{task_id}] tóm gọn ghi chú lỗi: {e}")
+            return
+        if not summary:
+            return
+        for index, base in reversed(holders):
+            if base is None:
+                del messages[index]
+            else:
+                messages[index]["content"] = (base + " [ghi chú trang này đã gộp vào "
+                                              "'Ghi chú tổng hợp' bên dưới]")
+        messages.append({"role": "user", "content": f"{SUMMARY_HEAD}\n{summary}" + NT})
+        log(f"[{task_id}] tóm gọn ghi chú: {self._notes_chars} -> {len(summary)} ký tự")
+        self._notes_chars = len(summary)
 
     async def _look_before_enter(self, task_id: str) -> str:
         """Enter right after typing into Windows Search opens whatever happens to
