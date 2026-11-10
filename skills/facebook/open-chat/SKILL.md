@@ -25,4 +25,5 @@ tên X là BẮT BUỘC, `control` chỉ là tuỳ chọn.
 ## Lưu ý định vị
 - Tên X có thể xuất hiện nhiều nơi (Người liên hệ, danh sách Messenger, bài đăng):
   luôn kèm area/anchor như trên để bấm đúng chỗ.
-- Có nhiều người trùng tên: dừng và hỏi người dùng chọn ai (mô tả ảnh đại diện/tên đầy đủ).
+- Có nhiều người trùng tên → `ask_user`, mỗi người một lựa chọn (tên đầy đủ + thông tin
+  phụ), rồi mở người được chọn.

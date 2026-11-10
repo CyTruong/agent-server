@@ -2,7 +2,7 @@
 
 ## Xác định đúng bài
 1. `screenshot`. Xác định bài người dùng muốn (theo người đăng / nội dung). Chưa thấy
-   thì `scroll` và chụp lại. Không chắc là bài nào thì hỏi lại.
+   thì `scroll` và chụp lại. Không chắc là bài nào → `ask_user`, mỗi bài một lựa chọn (người đăng + vài chữ đầu).
 2. Ghi nhớ **anchor của bài**: tên người đăng hoặc vài chữ đầu nội dung.
 
 ## Thả cảm xúc

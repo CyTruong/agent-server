@@ -10,7 +10,7 @@ thấy, nên ghi cả hai (["Lưu", "Save"]).
   ["Cho phép Chỉnh sửa", "Enable Editing"] thì mới sửa được.
 
 ## Phím dùng được (gọi `hotkey`)
-`ctrl+f12` hộp Mở file · `f12` Lưu thành · `ctrl+s` lưu · `ctrl+n` tài liệu mới ·
+`win+s` tìm kiếm Windows (tìm file, mở Word) · `ctrl+f12` hộp Mở file · `f12` Lưu thành · `ctrl+s` lưu · `ctrl+n` tài liệu mới ·
 `ctrl+w` đóng tài liệu · `ctrl+h` tìm và thay thế · `ctrl+home`/`ctrl+end` về đầu/cuối ·
 `ctrl+z` hoàn tác · `ctrl+b`/`ctrl+i`/`ctrl+u` đậm/nghiêng/gạch chân ·
 `ctrl+alt+1`/`2`/`3` kiểu tiêu đề · `ctrl+enter` sang trang mới.

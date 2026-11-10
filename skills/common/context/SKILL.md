@@ -19,20 +19,19 @@ Dùng khi yêu cầu KHÔNG nói rõ ứng dụng/nền tảng (vd "gửi tin nh
    - Đang mở app KHÔNG liên quan → xem bước 4.
 4. Khi không chắc / không có app phù hợp:
    - Có app chat đang mở → ưu tiên app ĐANG mở.
-   - Không có app chat nào mở, hoặc nhiều cửa sổ chat → **DỪNG và HỎI** người dùng
-     muốn dùng nền tảng nào (vd "Zalo hay Facebook?"). Không tự đoán.
+   - Không có app chat nào mở, hoặc nhiều cửa sổ chat → `ask_user` "Dùng nền tảng nào?"
+     với options ["Zalo", "Facebook"]. Không tự đoán.
 
 ## Trước khi gửi/nhắn/đăng cho một "người" (áp dụng mọi nền tảng)
 - **Không bịa người nhận.** Người/nhóm nhận phải là một liên hệ CÓ THẬT, xác minh
   được trên màn hình. Nếu tên nghe không giống người (vd "My Documents", "Downloads",
-  tên thư mục/file/ứng dụng) hoặc bạn không chắc đó là ai → **DỪNG và HỎI**, đừng coi
+  tên thư mục/file/ứng dụng) hoặc bạn không chắc đó là ai → `ask_user`, đừng coi
   một mục trùng tên là người nhận.
 - **Không gõ/gửi vào khung đang mở sẵn** chỉ vì tiện. Phải mở/đã mở ĐÚNG khung của
   người cần nhắn (tên khớp) rồi mới gõ.
-- Tìm không ra người đó → **DỪNG và báo** "không tìm thấy <tên>", hỏi lại; KHÔNG gửi
-  đại cho ai khác.
-- Khi bạn dừng để hỏi, hãy nói rõ ra (câu hỏi/`?`) — hệ thống sẽ chuyển câu hỏi đó
-  cho người dùng thay vì ép bạn gửi.
+- Tìm không ra người đó → `ask_user` "Không tìm thấy <tên>, ý bạn là ai?" (options là
+  các tên gần giống đang thấy, nếu có); KHÔNG gửi đại cho ai khác.
+- Người dùng không trả lời `ask_user` → kết thúc và nói rõ đang chờ họ chọn.
 
 ## Lưu ý
 - Hướng dẫn chi tiết theo nền tảng chỉ được nạp khi yêu cầu có nhắc tên app. Nếu màn

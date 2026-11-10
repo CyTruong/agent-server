@@ -30,7 +30,10 @@ BASE_PROMPT = (
     "quan trọng, screenshot để xác minh. Chỉ chốt kết quả từ những gì THẤY trên ảnh. "
     "Nếu nhiệm vụ cần xem nhiều hơn một màn hình (lướt/tổng hợp nhiều mục): phải "
     "scroll rồi screenshot lại và lặp cho tới khi gom đủ; KHÔNG kết luận hay tóm tắt "
-    "từ một ảnh duy nhất. Khi xong hoặc không thể tiếp tục, trả lời "
+    "từ một ảnh duy nhất. Khi PHÂN VÂN giữa nhiều lựa chọn (nhiều file/người trùng hoặc "
+    "gần giống tên, không rõ nền tảng, không tìm thấy thứ cần): gọi ask_user(question, "
+    "options) để người dùng chọn rồi làm tiếp, KHÔNG tự đoán. Khi xong hoặc không thể "
+    "tiếp tục, trả lời "
     "bằng văn bản ngắn, không gọi thêm công cụ. /no_think"
 )
 
@@ -115,7 +118,8 @@ SKILL_KEYWORDS = {
     "word/overview":    None,   # always, once the group is on
     # Foundational like zalo/open-chat: reading and editing first need the file open.
     "word/open-file":   None,
-    "word/find-file":   ["tìm", "search", "ở đâu", "kiếm"],
+    # Opening by name goes through Windows Search, so this is needed for most opens.
+    "word/find-file":   None,
     "word/close-file":  ["đóng", "tắt", "thoát", "close"],
     "word/read-file":   ["đọc", "xem", "tóm tắt", "nội dung", "có gì", "kiểm tra", "nói về"],
     "word/create-file": ["tạo", "soạn", "viết", "mới", "new"],

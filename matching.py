@@ -120,6 +120,8 @@ _UI_LABELS = frozenset(_norm(w) for w in (
 ))
 _PERSON_CUES = ("liên hệ", "người", "tên", "bạn", "anh", "chị", "em", "cô", "chú", "bác",
                 "cuộc trò chuyện", "hội thoại", "kết quả tìm kiếm")
+# A target about one of these is a file, not a person ("Ho-so-du-an...docx").
+_FILE_CUES = ("file", "tệp", "thư mục", "tài liệu", "folder")
 
 
 def _words(s: str) -> list:
@@ -291,6 +293,9 @@ def is_proper_name(keyword: str, request: str, target: str = "") -> bool:
     capitalised, or that the target describes as a person."""
     keyword = (keyword or "").strip()
     if len(keyword) < 2 or _norm(keyword) in _UI_LABELS or any(c.isdigit() for c in keyword):
+        return False
+    if any(c in keyword for c in "-_./\\") or any(
+            _seq_at(_words(cue), _words(target)) >= 0 for cue in _FILE_CUES):
         return False
     words = _words(keyword)
     capitalised = all(w[:1].isupper() for w in keyword.split())

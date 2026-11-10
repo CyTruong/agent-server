@@ -169,6 +169,12 @@ def prepared_runner(monkeypatch, items, confirm=None):
         tr.asked.append(message)
         return confirm
     tr._ask_confirm = fake_confirm
+
+    # confirm=True picks the first option, anything else answers nothing.
+    async def fake_choice(task_id, question, options):
+        tr.asked.append(question + " | " + " | ".join(options))
+        return (0, "1") if confirm else (None, "")
+    tr._ask_choice = fake_choice
     return tr
 
 

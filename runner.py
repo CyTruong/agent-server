@@ -1,5 +1,6 @@
 """TaskRunner: the LLM <-> tool loop for one user request at a time."""
 import asyncio
+import contextlib
 import hashlib
 import time
 import traceback
@@ -14,6 +15,7 @@ from config import (
     CACHE_ENABLED,
     CACHE_MAX_AGE_DAYS,
     CACHE_THRESHOLD,
+    CHOICE_TIMEOUT,
     DEBUG,
     DEVICE_TIMEOUT,
     KEEP_IMAGES,
@@ -33,7 +35,13 @@ from config import (
 )
 from grounding import GroundingMixin
 from imaging import annotate_grid, prune_images
-from intents import _is_ask_or_blocked, _needs_delivery, _needs_plan, parse_yes_no
+from intents import (
+    _is_ask_or_blocked,
+    _needs_delivery,
+    _needs_plan,
+    parse_choice,
+    parse_yes_no,
+)
 from relay_client import RelayClient, new_request_id
 from skill_select import build_system_prompt
 from task_cache import TaskCache, is_verified_workflow
@@ -52,6 +60,9 @@ class TaskRunner(GroundingMixin):
             max_age_days=CACHE_MAX_AGE_DAYS,
         )
         self._confirm_waiters: dict[str, asyncio.Future] = {}
+        self._choice: asyncio.Future | None = None   # an ask_user waiting for a reply
+        self._deadline = 0.0                          # task timeout, pushed back while
+        self._user_wait_since: float | None = None    # the user is answering
         self._active: asyncio.Task | None = None
         self._pending_image: bytes | None = None
         self._raw_frame: bytes | None = None   # last screenshot, no grid (for zoom)
@@ -90,6 +101,9 @@ class TaskRunner(GroundingMixin):
         text = msg.get("text", "").strip()
         task_id = msg.get("task_id") or f"task-{int(time.time())}"
         if not text:
+            return
+        if self._choice is not None and not self._choice.done():
+            self._choice.set_result(text)   # the answer to ask_user, not a new task
             return
         if self._active and not self._active.done():
             await self.relay.send_ui({"type": "error", "task_id": task_id,
@@ -161,14 +175,27 @@ class TaskRunner(GroundingMixin):
             log(f"workflow cache: save failed: {exc}")
 
     async def run_task(self, task_id: str, text: str):
-        """Run one request; whatever happens the UI gets a final event."""
+        """Run one request; whatever happens the UI gets a final event. Time spent
+        waiting for the user's answer does not count toward TASK_TIMEOUT."""
+        inner = asyncio.ensure_future(self._execute(task_id, text))
+        self._deadline = time.monotonic() + TASK_TIMEOUT
         try:
-            await asyncio.wait_for(self._execute(task_id, text), TASK_TIMEOUT)
+            while not inner.done():
+                now = time.monotonic()
+                waiting = self._user_wait_since is not None
+                if not waiting and now >= self._deadline:
+                    inner.cancel()
+                    await asyncio.wait({inner})
+                    raise asyncio.TimeoutError
+                await asyncio.wait({inner}, timeout=0.5 if waiting else self._deadline - now)
+            inner.result()
         except asyncio.TimeoutError:
             log(f"[{task_id}] task timeout after {TASK_TIMEOUT}s")
             await self.relay.send_ui({"type": "done", "task_id": task_id,
                                       "result": "hết thời gian"})
         except asyncio.CancelledError:
+            inner.cancel()
+            await asyncio.wait({inner})
             log(f"[{task_id}] cancelled")
             await self.relay.send_ui({"type": "done", "task_id": task_id,
                                       "result": "đã huỷ"})
@@ -373,6 +400,8 @@ class TaskRunner(GroundingMixin):
             return res
         if name == "tap":
             return await self._tap(task_id, args)
+        if name == "ask_user":
+            return await self._ask_user_tool(task_id, args)
         # Image-space coords from the model: refine by zoom, then map to screen.
         if name in ("move", "click") and "x" in args and "y" in args:
             ix, iy = int(args["x"]), int(args["y"])
@@ -422,6 +451,55 @@ class TaskRunner(GroundingMixin):
             "xuất hiện. Không thấy thì nói rõ là chưa xác minh được. KHÔNG gửi lại." + NT})
         self._pending_image = None
         return True
+
+    @contextlib.contextmanager
+    def _user_wait(self):
+        """Pause the task timeout while the user is answering."""
+        started = time.monotonic()
+        self._user_wait_since = started
+        try:
+            yield
+        finally:
+            self._user_wait_since = None
+            self._deadline += time.monotonic() - started
+
+    async def _ask_choice(self, task_id: str, question: str, options: list) -> tuple:
+        """Show a question with numbered options in the chat and wait for the
+        reply (typed, or a button on firmware with the new page). Returns
+        (index or None, reply text); the text is "" when nobody answered."""
+        lines = [question] + [f"{i}. {o}" for i, o in enumerate(options, 1)]
+        lines.append("(Trả lời bằng số thứ tự.)" if options else "(Trả lời trong ô chat.)")
+        self._choice = asyncio.get_running_loop().create_future()
+        await self.relay.send_ui({"type": "assistant", "task_id": task_id,
+                                  "content": "\n".join(lines), "options": options})
+        log(f"[{task_id}] hỏi người dùng: {question} {options}")
+        try:
+            with self._user_wait():
+                reply = await asyncio.wait_for(self._choice, CHOICE_TIMEOUT)
+        except asyncio.TimeoutError:
+            log(f"[{task_id}] người dùng không trả lời sau {CHOICE_TIMEOUT:.0f}s")
+            return None, ""
+        finally:
+            self._choice = None
+        index = parse_choice(reply, options)
+        log(f"[{task_id}] người dùng trả lời: {reply!r} -> {index}")
+        return index, reply
+
+    async def _ask_user_tool(self, task_id: str, args: dict) -> str:
+        question = str(args.get("question") or "").strip()
+        options = args.get("options") or []
+        if isinstance(options, str):
+            options = [options]
+        options = [str(o).strip() for o in options if str(o).strip()][:8]
+        if not question:
+            return "error: thiếu question"
+        index, reply = await self._ask_choice(task_id, question, options)
+        if not reply:
+            return ("error: người dùng không trả lời. ĐỪNG tự chọn thay; kết thúc và nói rõ "
+                    "đang chờ người dùng chọn.")
+        if index is not None:
+            return f"ok: người dùng chọn {index + 1}. {options[index]}"
+        return f"ok: người dùng trả lời: {reply}"
 
     async def _type_text(self, task_id: str, text: str) -> str:
         """Type text of any length as sequential chunks. Stops at the first
@@ -558,7 +636,8 @@ class TaskRunner(GroundingMixin):
         # on_confirm() resolves this future when the UI answers. No answer in 60s
         # -> deny (fail safe).
         try:
-            return await asyncio.wait_for(fut, 60)
+            with self._user_wait():
+                return await asyncio.wait_for(fut, 60)
         except asyncio.TimeoutError:
             return False
         finally:

@@ -7,7 +7,8 @@
 3. Nếu Word hỏi lưu thay đổi:
    - Tác vụ này vừa sửa file, hoặc người dùng bảo lưu: `tap` keywords ["Lưu", "Save"].
    - Người dùng nói rõ không lưu: `tap` keywords ["Không Lưu", "Don't Save"].
-   - Còn lại: **DỪNG và HỎI** có lưu không. Không tự bỏ thay đổi.
+   - Còn lại: `ask_user` "Có lưu thay đổi không?" với lựa chọn ["Lưu", "Không lưu",
+     "Chưa đóng"]. Không tự bỏ thay đổi.
 4. `screenshot` xác minh tài liệu đã đóng.
 
 ## Lưu ý

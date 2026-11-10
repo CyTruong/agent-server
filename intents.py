@@ -63,6 +63,22 @@ def _needs_plan(text: str) -> bool:
     return _needs_delivery(text) and any(w in t for w in _INFO_WORDS)
 
 
+def parse_choice(reply: str, options: list) -> int | None:
+    """Index of the option the user picked, by number ("2", "số 2", "chọn 2") or
+    by its text. None when the reply is neither."""
+    import re
+    text = (reply or "").strip()
+    match = re.fullmatch(r"(?:số|chọn|option)?\s*(\d{1,2})\s*\.?", text.lower())
+    if match:
+        number = int(match.group(1))
+        return number - 1 if 1 <= number <= len(options) else None
+    folded = " ".join(text.casefold().split())
+    for index, option in enumerate(options):
+        if folded == " ".join(str(option).casefold().split()):
+            return index
+    return None
+
+
 def parse_yes_no(reply: str) -> bool:
     """True when a CO/KHONG classifier reply says yes. Anything unclear is no."""
     words = (reply or "").strip().lower().split()

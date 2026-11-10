@@ -8,7 +8,7 @@
 4. Trang kết quả: mục **"Mọi người"** liệt kê các tài khoản (ảnh đại diện, tên, thông
    tin phụ như "Bạn bè", nơi sống, bạn chung).
 5. Chọn đúng người: `tap` keywords [tên đầy đủ], anchor ["Mọi người"],
-   relation "below". Trùng tên: mô tả các lựa chọn (thông tin phụ) và hỏi người dùng.
+   relation "below". Trùng tên → `ask_user`, mỗi người một lựa chọn (tên + thông tin phụ).
 6. `screenshot` xác minh đã vào trang cá nhân: tên lớn ở giữa trên, dưới có các nút
    như "Nhắn tin", "Bạn bè" hoặc "Thêm bạn bè".
 

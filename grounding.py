@@ -884,19 +884,31 @@ class GroundingMixin:
                 best, best_score = cand, score
         return best if best_score >= OCR_MATCH_MIN else res.box
 
-    async def _confirm_name(self, task_id: str, target: str, res) -> str:
-        """Ask the user about an uncertain name. Returns "" if accepted, else the
-        tool error for the model."""
-        best = res.box["text"]
-        seen = ", ".join(f"'{b['text']}'" for b in res.candidates[:5])
-        ok = await self._ask_confirm(
-            task_id, "tap", {"target": target, "chosen": best},
-            message=f"Không chắc tên cho '{target}'. Trên màn hình thấy: {seen}. Bấm vào '{best}'?")
-        if ok:
-            self._approved_names.add(res.box["text"])
-            return ""
-        return (f"error: người dùng không xác nhận '{best}' (thấy: {seen}). ĐỪNG bấm hay gửi "
-                "cho người khác; hãy hỏi lại người dùng đúng tên.")
+    def _place(self, box: dict) -> str:
+        """Rough screen position, so two equal names can be told apart."""
+        W, H = self._img_w or 1, self._img_h or 1
+        col = "trái" if box["cx"] < W / 3 else ("phải" if box["cx"] > 2 * W / 3 else "giữa")
+        row = "trên" if box["cy"] < H / 3 else ("dưới" if box["cy"] > 2 * H / 3 else "giữa")
+        return f"vùng {row}, bên {col}"
+
+    async def _confirm_name(self, task_id: str, target: str, res) -> tuple:
+        """Let the user pick the right box among the candidates. Returns
+        (box, "") or (None, the tool error for the model)."""
+        choices, labels = [], []
+        for box in res.candidates:
+            label = f"{box['text']} ({self._place(box)})"
+            if label not in labels and len(choices) < 5:
+                labels.append(label)
+                choices.append(box)
+        index, _reply = await self._ask_choice(
+            task_id, f"Không chắc nên bấm vào đâu cho '{target}'. Chọn giúp:",
+            labels + ["Không phải mục nào ở trên"])
+        if index is not None and index < len(choices):
+            self._approved_names.add(choices[index]["text"])
+            return choices[index], ""
+        seen = ", ".join(f"'{b['text']}'" for b in choices)
+        return None, (f"error: người dùng không chọn mục nào (thấy: {seen}). ĐỪNG bấm hay gửi "
+                      "cho người khác; hãy hỏi lại người dùng đúng tên.")
 
     def _anchor_search(self, task_id: str, a: dict, relation: str) -> tuple:
         """(pt, how, region, ctx) for a chosen anchor box."""
@@ -966,9 +978,10 @@ class GroundingMixin:
                 + (f" -> '{res.box['text']}'" if res.box else ""))
             if res.box:
                 if res.status == "uncertain":
-                    refused = await self._confirm_name(task_id, target, res)
+                    box, refused = await self._confirm_name(task_id, target, res)
                     if refused:
                         return refused
+                    res = NameResolution("certain", box, res.candidates)
                 sx, sy = self._to_screen(res.box["cx"], res.box["cy"])
                 return await self._finish_tap(task_id, target, sx, sy, "OCR-name")
             unverified = f"không đọc được tên {names} trên màn hình"
@@ -980,11 +993,13 @@ class GroundingMixin:
             log(f"[{task_id}] tên mốc {anchor_names}: {res.status}"
                 + (f" -> '{res.box['text']}'" if res.box else ""))
             if res.box:
+                anchor_box = None
                 if res.status == "uncertain":
-                    refused = await self._confirm_name(task_id, target, res)
+                    anchor_box, refused = await self._confirm_name(task_id, target, res)
                     if refused:
                         return refused
-                anchor_box = self._pick_name_anchor(res, anchor_names, kws, relation, items)
+                anchor_box = anchor_box or self._pick_name_anchor(
+                    res, anchor_names, kws, relation, items)
                 pt, how, region, ctx = self._anchor_search(task_id, anchor_box, relation)
             else:
                 unverified = unverified or f"không đọc được tên mốc {anchor_names} trên màn hình"

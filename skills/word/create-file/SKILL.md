@@ -1,7 +1,7 @@
 # [Word] Tạo tài liệu mới
 
 ## Quy trình
-1. `screenshot`. Đang có Word: `hotkey ctrl+n`. Chưa có: `key win` → `type Word` →
+1. `screenshot`. Đang có Word: `hotkey ctrl+n`. Chưa có: `hotkey win+s` → `type Word` →
    `key enter` → `screenshot`, rồi `hotkey ctrl+n` hoặc `tap` keywords ["Tài liệu trống",
    "Blank document"].
 2. `screenshot` xác minh có trang trắng.
@@ -17,6 +17,7 @@
 
 ## Quy tắc
 - Người dùng không đặt tên: tự đặt tên ngắn theo nội dung và báo lại tên, thư mục.
-- Hỏi có muốn thay thế file đã có: **DỪNG và HỎI**, không tự ghi đè.
+- Word hỏi có thay thế file đã có: `ask_user` với lựa chọn ["Ghi đè", "Đặt tên khác"],
+  không tự ghi đè.
 - Gõ đúng nội dung được yêu cầu. Yêu cầu chỉ nêu chủ đề thì tự soạn ngắn gọn.
 - Không gõ quá dài trong một tác vụ: mỗi đoạn tốn một lượt `type` và một lượt `enter`.

@@ -117,6 +117,9 @@ CACHE_DB = os.environ.get(
 )
 CACHE_THRESHOLD = float(os.environ.get("TASK_CACHE_THRESHOLD", "0.82"))
 CACHE_MAX_AGE_DAYS = int(os.environ.get("TASK_CACHE_MAX_AGE_DAYS", "30"))
+# How long ask_user waits for the user's answer. The wait does not count toward
+# TASK_TIMEOUT_SECONDS.
+CHOICE_TIMEOUT = float(os.environ.get("CHOICE_TIMEOUT_SECONDS", "180"))
 SCREEN_CACHE_TTL = float(os.environ.get("SCREEN_CACHE_TTL_SECONDS", "6.0"))
 OCR_CACHE_TTL = float(os.environ.get("OCR_CACHE_TTL_SECONDS", "6.0"))
 SCREEN_MUTATING_TOOLS = frozenset({

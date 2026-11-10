@@ -10,4 +10,4 @@
 
 ## Quy tắc
 - Trang web tải không tức thì: luôn chụp lại sau khi điều hướng, đừng bấm mù.
-- Không tải/chạy file lạ, không bấm quảng cáo/pop-up; gặp pop-up thì chụp và hỏi.
+- Không tải/chạy file lạ, không bấm quảng cáo/pop-up; gặp pop-up thì chụp rồi `ask_user`.

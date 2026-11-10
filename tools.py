@@ -169,6 +169,26 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "ask_user",
+            "description": ("Hỏi người dùng và CHỜ câu trả lời rồi làm tiếp. Dùng khi phân vân: "
+                           "nhiều file/người/mục trùng hoặc gần giống nhau, không rõ nền tảng, "
+                           "không tìm thấy thứ được yêu cầu. Có lựa chọn thì liệt kê trong "
+                           "options (mỗi lựa chọn đủ để phân biệt: tên + thông tin phụ). "
+                           "KHÔNG tự đoán thay người dùng."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string", "description": "câu hỏi ngắn"},
+                    "options": {"type": "array", "items": {"type": "string"},
+                                "description": "2-8 lựa chọn; để trống nếu hỏi tự do"},
+                },
+                "required": ["question"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "web_search",
             "description": ("Tìm thông tin trên Internet (chạy ngay trên máy chủ, KHÔNG "
                            "điều khiển PC). Dùng khi cần dữ kiện mới/không chắc: giá cả, "
@@ -217,6 +237,8 @@ SAFE_HOTKEYS = frozenset({
     "ctrl+t", "ctrl+w", "ctrl+l", "ctrl+r", "ctrl+n", "ctrl+tab", "ctrl+shift+tab",
     "ctrl+shift+t", "ctrl+enter", "ctrl+home", "ctrl+end", "shift+enter", "shift+tab",
     "alt+tab", "alt+left", "alt+right", "f5",
+    # Windows Search: only opens the search box; typed text is checked by `type`.
+    "win+s",
     # Microsoft Word: open/save-as dialogs, replace, formatting, heading styles.
     "ctrl+f12", "f12", "ctrl+h", "ctrl+b", "ctrl+i", "ctrl+u",
     "ctrl+alt+1", "ctrl+alt+2", "ctrl+alt+3",
