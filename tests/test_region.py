@@ -57,6 +57,7 @@ def region_runner(monkeypatch, supports_region=True, ocr_items=None):
     monkeypatch.setattr(runner, "CACHE_ENABLED", False)
     monkeypatch.setattr(runner, "PLAN_ENABLE", False)
     monkeypatch.setattr(grounding, "SAVE_IMAGES", False)
+    monkeypatch.setattr(runner, "FIRST_LOOK", False)   # tests that want it turn it on
     monkeypatch.setattr(ocr, "run_ocr", lambda image, lang: ocr_items or [])
     relay = RegionRelay(supports_region)
     tr = runner.TaskRunner(relay)

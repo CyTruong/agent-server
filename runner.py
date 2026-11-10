@@ -2,6 +2,7 @@
 import asyncio
 import contextlib
 import hashlib
+import json
 import re
 import time
 import traceback
@@ -21,6 +22,7 @@ from config import (
     CONTEXT_RESULT_CHARS,
     CONTEXT_TTL,
     CONTEXT_TURNS,
+    FIRST_LOOK,
     DEBUG,
     DEVICE_TIMEOUT,
     KEEP_IMAGES,
@@ -54,10 +56,41 @@ from intents import (
     parse_yes_no,
 )
 from relay_client import RelayClient, new_request_id
+from matching import _sim, requested_persons
 from skill_select import build_system_prompt, gated_groups
 from task_cache import TaskCache, is_verified_workflow
 from tools import TOOLS, TOOL_NAMES, is_dangerous, split_for_type
 
+
+# Words that refer back to an earlier request ("gửi tóm tắt TRÊN cho anh Vinh").
+REFERENCE_WORDS = ("trên", "đó", "này", "vừa", "vừa rồi", "lúc nãy", "ấy", "kết quả",
+                   "tiếp", "nữa")
+# Window title words showing each app is in front (compared without accents/spaces).
+APP_TITLE_HINTS = {"zalo": ("zalo",), "facebook": ("facebook", "messenger"),
+                   "word": ("word",)}
+APP_LABELS = {"zalo": "Zalo", "facebook": "Facebook", "word": "Microsoft Word"}
+
+def _same_name(query: str, shown: str) -> bool:
+    """Is the search result `shown` exactly what was typed? Extension, accents and
+    separators aside; a name cut with "..." must start like the query. Close is
+    not enough: "Ho-so" must not open "Ho-so-cu.docx"."""
+    cut = shown.rstrip().endswith(("...", "…"))
+    shown = re.sub(r"(\.{3}|…)\s*$", "", shown.strip())
+    shown = re.sub(r"\.(docx?|xlsx?|pptx?|pdf|txt|exe|lnk)$", "", shown, flags=re.IGNORECASE)
+    query = re.sub(r"\.(docx?|xlsx?|pptx?|pdf|txt|exe|lnk)$", "", query.strip(), flags=re.IGNORECASE)
+    q, s = _file_key(query), _file_key(shown)
+    if not q or not s:
+        return False
+    return q == s or (cut and len(s) >= 12 and q.startswith(s))
+
+
+# The same failing call is refused after this many identical failures.
+REPEAT_FAIL_LIMIT = 2
+NEVER_BLOCKED = ("screenshot", "zoom", "ask_user", "web_search", "fetch_url")
+# Errors that are instructions from the agent, not failures of the action.
+GUIDANCE_ERRORS = ("CHƯA nhấn Enter", "KHÔNG mở lại", "KHÔNG chạy")
+NOTHING_NEW = "KHÔNG CÓ NỘI DUNG MỚI"
+SEARCH_TOP_LABELS = ("Best match", "Kết quả phù hợp nhất", "Phù hợp nhất")
 
 MODEL_NOTE_HEAD = "Ghi chú trang này (model chép lại)"
 OCR_NOTE_HEAD = "Chữ MỚI trên trang này (OCR, có thể sai chính tả)"
@@ -119,6 +152,8 @@ class TaskRunner(GroundingMixin):
         self._task_groups: tuple = ()          # app skill groups of the current task
         self._last_final: dict | None = None   # last done/error event sent
         self._search_open = False   # Windows Search opened, results not looked at yet
+        self._search_query = ""     # what was typed into Windows Search
+        self._fail_counts: dict = {}   # identical failed calls in this task
         self._pending_note = None   # caption for _pending_image when it is not a screenshot
         self._shot_size = (0, 0)    # size of the last full screenshot (kept for zoom boxes)
         self._notes_chars = 0       # characters of page notes kept in this task
@@ -284,7 +319,10 @@ class TaskRunner(GroundingMixin):
             self._remember(task_id, text)
 
     async def _execute(self, task_id: str, text: str):
-        history = self._recent_history()
+        recent = self._recent_history()
+        # Groups the request names by itself, before any context is carried over.
+        named = gated_groups(build_system_prompt(text)[1])
+        history = [item for item in recent if self._related(item, text, named)]
         carry = history[-1]["groups"] if history else ()
         sys_prompt, skill_names = build_system_prompt(text, carry)
         self._task_groups = gated_groups(skill_names)
@@ -292,11 +330,16 @@ class TaskRunner(GroundingMixin):
         self._executed_steps = []
         self._approved_names = set()
         self._search_open = False
+        self._search_query = ""
+        self._fail_counts = {}
         self._stuck_warned = False
         messages = [{"role": "system", "content": sys_prompt}]
         if history:
             messages.append({"role": "user", "content": self._history_note(history) + NT})
-            log(f"[{task_id}] ngữ cảnh: {len(history)} yêu cầu trước, nhóm skill {carry}")
+            log(f"[{task_id}] ngữ cảnh: {len(history)}/{len(recent)} yêu cầu trước liên quan, "
+                f"nhóm skill {carry}")
+        elif recent:
+            log(f"[{task_id}] ngữ cảnh: {len(recent)} yêu cầu trước không liên quan -> bỏ")
         messages.append({"role": "user", "content": text + NT})
         cache_match = self.task_cache.retrieve(text, skill_names, device_id=self.device_id)
         if cache_match:
@@ -311,6 +354,8 @@ class TaskRunner(GroundingMixin):
         await self._progress(task_id, 0, "đã nhận yêu cầu")
         log(f"=== TASK {task_id} === {text!r}")
         log(f"[{task_id}] skills: {skill_names} (system prompt {len(sys_prompt)} chars)")
+        if FIRST_LOOK and (self._task_groups or any(n.startswith("windows/") for n in skill_names)):
+            await self._first_look(task_id, messages)
         empties = 0        # consecutive fully-empty LLM replies
         delivered = False  # has the agent actually typed/sent anything yet?
         deliver_nudges = 0 # times we pushed it to finish the "send" part
@@ -318,7 +363,8 @@ class TaskRunner(GroundingMixin):
         watch = ProgressWatch(STUCK_LIMIT)   # actions that change nothing on screen
         # Reading a document or chat page by page: keep each page's text in the
         # conversation and stop once moving shows nothing new.
-        reader = ReadingTracker() if any(n in READING_SKILLS for n in skill_names) else None
+        reader = (ReadingTracker() if any(n in READING_SKILLS for n in skill_names)
+                  and not _needs_delivery(text) else None)
         self._notes_chars, self._notes_recent = 0, []
         self._note_dedupe = ReadingTracker()
         force_answer = False
@@ -438,11 +484,26 @@ class TaskRunner(GroundingMixin):
                 args = call["function"].get("arguments", {}) or {}
                 log(f"[{task_id}] step {step}: tool -> {name} {args}")
                 await self._progress(task_id, step, f"{name} {args}")
-                try:
-                    result = await self._run_tool(task_id, name, args)
-                except Exception as e:  # noqa: BLE001 - e.g. malformed model arguments
-                    log(f"[{task_id}] tool {name} crashed:\n{traceback.format_exc()}")
-                    result = f"error: không chạy được {name}: {e}"
+                call_key = (name, json.dumps(args, sort_keys=True, ensure_ascii=False, default=str))
+                search_was_open = self._search_open
+                if (name not in NEVER_BLOCKED
+                        and self._fail_counts.get(call_key, 0) >= REPEAT_FAIL_LIMIT):
+                    log(f"[{task_id}] chặn lặp lại lệnh đã lỗi {REPEAT_FAIL_LIMIT} lần: {name}")
+                    result = ("error: KHÔNG chạy: lệnh này đã lỗi y hệt "
+                              f"{REPEAT_FAIL_LIMIT} lần. Đổi cách khác (screenshot xem vì sao, "
+                              "dùng thao tác khác) hoặc ask_user.")
+                else:
+                    try:
+                        result = await self._run_tool(task_id, name, args)
+                    except Exception as e:  # noqa: BLE001 - e.g. malformed model arguments
+                        log(f"[{task_id}] tool {name} crashed:\n{traceback.format_exc()}")
+                        result = f"error: không chạy được {name}: {e}"
+                    if (result.startswith("error") and name not in NEVER_BLOCKED
+                            and not any(m in result for m in GUIDANCE_ERRORS)):
+                        count = self._fail_counts.get(call_key, 0) + 1
+                        self._fail_counts[call_key] = count
+                        if count >= REPEAT_FAIL_LIMIT:
+                            result += (f" (Đã lỗi y hệt {count} lần: KHÔNG lặp lại lệnh này nữa.)")
                 if result.startswith("error"):
                     pass
                 elif name in SCREEN_MUTATING_TOOLS:
@@ -455,7 +516,7 @@ class TaskRunner(GroundingMixin):
                         self._stuck_warned = True
                         log(f"[{task_id}] màn hình không đổi ({watch.stuck}/{STUCK_LIMIT})")
                         result = f"{result} {warning}"
-                    if reader:
+                    if reader and not search_was_open:
                         note, done_reading = await self._reading_note(task_id, reader)
                         result = f"{result}{note}"
                         if done_reading and not force_answer:
@@ -525,6 +586,9 @@ class TaskRunner(GroundingMixin):
                 return (f"error: KHÔNG mở lại: thanh tiêu đề đang là '{opened}', file cần dùng ĐÃ MỞ. "
                         "Làm tiếp việc đọc/sửa ngay trên cửa sổ này.")
             self._search_open = True
+            self._search_query = ""
+        if name == "type" and self._search_open:
+            self._search_query = str(args.get("text") or "")
         if (name == "key" and self._search_open
                 and str(args.get("name", "")).lower() == "enter"):
             return await self._look_before_enter(task_id)
@@ -553,9 +617,11 @@ class TaskRunner(GroundingMixin):
         if name == "ask_user":
             return await self._ask_user_tool(task_id, args)
         # Image-space coords from the model: refine by zoom, then map to screen.
+        image_point = None
         if name in ("move", "click") and "x" in args and "y" in args:
             ix, iy = int(args["x"]), int(args["y"])
             ix, iy = await self._refine_point(task_id, ix, iy)
+            image_point = (ix, iy)
             self._mark_click(task_id, ix, iy, f"{name}_click")
             args = dict(args)
             if self._img_w and self._scr_w:
@@ -564,7 +630,9 @@ class TaskRunner(GroundingMixin):
                 log(f"[{task_id}] {name} img({ix},{iy}) -> screen({args['x']},{args['y']})")
             else:
                 args["x"], args["y"] = ix, iy
-        if is_dangerous(name, args):
+        if name == "type" and isinstance(args.get("text"), str):
+            args = dict(args, text=self._prepare_text(args["text"]))
+        if is_dangerous(name, args) and not self._safe_multiline(name, args):
             ok = await self._ask_confirm(task_id, name, args)
             if not ok:
                 return "error: người dùng từ chối hành động nguy hiểm"
@@ -585,6 +653,9 @@ class TaskRunner(GroundingMixin):
             detail = (res.get("result") or {}).get("detail", "")
             if name in SCREEN_MUTATING_TOOLS:
                 self._invalidate_screen_cache()
+            if image_point:
+                # Same units the model used: the device detail is in screen pixels.
+                return f"ok: {name} tại điểm ({image_point[0]},{image_point[1]}) trên ảnh"
             return f"ok {detail}".strip()
         return f"error: {res.get('error', 'thất bại')}"
 
@@ -652,18 +723,28 @@ class TaskRunner(GroundingMixin):
         return f"ok: người dùng trả lời: {reply}"
 
     async def _type_text(self, task_id: str, text: str) -> str:
-        """Type text of any length as sequential chunks. Stops at the first
-        failure and says so, because the model must not press Enter on half a
-        message."""
+        """Type text of any length. The device protocol is one line per command, so
+        each line is typed in chunks and line breaks are pressed as keys: shift+enter
+        (a new line that does not send, in chat apps) or enter in Word. Stops at the
+        first failure and says so, because the model must not press Enter on half
+        a message."""
+        lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        if "word" in self._task_groups:
+            newline = ("key", {"name": "enter"})
+        else:
+            newline = ("hotkey", {"combo": "shift+enter"})
+        steps = []
         try:
-            chunks = split_for_type(text)
+            for index, line in enumerate(lines):
+                if index:
+                    steps.append(newline)
+                steps += [("type", {"text": chunk}) for chunk in split_for_type(line) if chunk]
         except ValueError as e:
             return f"error: không gõ được: {e}"
-        for index, chunk in enumerate(chunks, start=1):
+        for index, (tool, args) in enumerate(steps, start=1):
             failure = ""
             try:
-                res = await self.relay.call_device("type", {"text": chunk}, task_id,
-                                                   timeout=DEVICE_TIMEOUT)
+                res = await self.relay.call_device(tool, args, task_id, timeout=DEVICE_TIMEOUT)
                 if not res.get("ok"):
                     failure = res.get("error", "thất bại")
             except asyncio.TimeoutError:
@@ -672,10 +753,11 @@ class TaskRunner(GroundingMixin):
                 failure = str(e)
             if failure:
                 self._invalidate_screen_cache()
-                return (f"error: lỗi khi gõ đoạn {index}/{len(chunks)}: {failure}. ĐỪNG nhấn Enter; "
+                return (f"error: lỗi khi gõ đoạn {index}/{len(steps)}: {failure}. ĐỪNG nhấn Enter; "
                         "screenshot kiểm tra ô nhập, xoá phần đã gõ rồi gõ lại.")
         self._invalidate_screen_cache()
-        return f"ok đã gõ {len(text)} ký tự"
+        breaks = len(lines) - 1
+        return f"ok đã gõ {len(text)} ký tự" + (f", {breaks} lần xuống dòng" if breaks else "")
 
     async def _capture_region(self, task_id: str, x: int, y: int, w: int, h: int) -> tuple:
         """Capture one screen rectangle. Returns (image, scale, native): image pixel
@@ -702,6 +784,8 @@ class TaskRunner(GroundingMixin):
         detail = (res.get("result") or {}).get("detail", "") or ""
         if "region" in detail:
             return image, size[0] / w, True
+        log(f"[{task_id}] thiết bị trả ảnh toàn màn hình thay vì vùng (detail: {detail[:60]!r}) "
+            "-> cắt tạm từ ảnh nhỏ")
         scale = size[0] / (self.relay.frame_sw or size[0])
         crop = crop_image(image, (x * scale, y * scale, (x + w) * scale, (y + h) * scale))
         return crop, scale, False
@@ -762,26 +846,90 @@ class TaskRunner(GroundingMixin):
                         keys.append(key)
         return keys
 
+    async def _read_title(self, task_id: str) -> str | None:
+        """OCR of the title bar of the window in front, or None if unavailable."""
+        screen_w, screen_h = self.relay.frame_sw, self.relay.frame_sh
+        if not (screen_w and OCR_ENABLE):
+            return None
+        x, y, w, h = fraction_box(ZOOM_AREAS["title"], screen_w, screen_h)
+        image, _scale, native = await self._capture_region(task_id, x, y, w, h)
+        if image is None:
+            return None
+        try:
+            items = await asyncio.get_running_loop().run_in_executor(
+                None, ocr.run_ocr, image if native else upscale(image), OCR_LANG)
+        except Exception as e:  # noqa: BLE001
+            log(f"[{task_id}] đọc thanh tiêu đề lỗi: {e}")
+            return None
+        return " ".join(it["text"] for it in items or []).strip()
+
+    @staticmethod
+    def _related(item: dict, text: str, named: tuple) -> bool:
+        """Is an earlier request relevant to this one? A request naming no app is a
+        follow-up and keeps its context. Otherwise the earlier one must share the
+        app, be referred to ("gửi tóm tắt trên"), or name the same person or file."""
+        if not named:
+            return True
+        if set(item["groups"]) & set(named):
+            return True
+        low = f" {text.lower()} "
+        if any(re.search(rf"(?<!\w){re.escape(word)}(?!\w)", low) for word in REFERENCE_WORDS):
+            return True
+        people = {" ".join(p) for p in requested_persons(text)}
+        if people & {" ".join(p) for p in requested_persons(item["request"])}:
+            return True
+        files = {_file_key(t) for t in re.findall(r"[\w.\-]*[-_][\w.\-]+", text)}
+        return any(_file_key(t) in files
+                   for t in re.findall(r"[\w.\-]*[-_][\w.\-]+", item["request"]))
+
+    def _app_in_front(self, title: str) -> tuple:
+        """(app the task needs, whether the title shows it). ("", True) when the task
+        needs no particular app."""
+        if not self._task_groups:
+            return "", True
+        key = _file_key(title)
+        for group in self._task_groups:
+            hints = APP_TITLE_HINTS.get(group, ())
+            if any(hint in key for hint in hints) or (
+                    group == "word" and any(k in key for k in self._wanted_files())):
+                return group, True
+        return self._task_groups[0], False
+
+    async def _first_look(self, task_id: str, messages: list) -> None:
+        """Show the model the real screen before its first step, with the window
+        in front, so it cannot act on stale context or a cached workflow."""
+        await self._screenshot(task_id, force=True, attach=True)
+        if self._pending_image is None:
+            log(f"[{task_id}] không chụp được màn hình lúc bắt đầu")
+            return
+        image, self._pending_image = self._pending_image, None
+        title = await self._read_title(task_id)
+        lines = ["Ảnh màn hình HIỆN TẠI, hệ thống tự chụp khi bắt đầu yêu cầu này. Ngữ cảnh "
+                 "và workflow cũ có thể đã sai: chỉ tin vào ảnh."]
+        if title:
+            lines.append(f"Thanh tiêu đề cửa sổ đang ở trước: '{title[:80]}'.")
+            app, in_front = self._app_in_front(title)
+            if app and not in_front:
+                lines.append(f"Ứng dụng cần dùng ({APP_LABELS.get(app, app)}) KHÔNG ở trước. Đưa "
+                             "nó lên trước (hotkey win+s → type tên ứng dụng → screenshot → "
+                             "mở đúng mục) và xác minh, TRƯỚC khi bấm hay gõ bất cứ gì.")
+            elif app:
+                lines.append(f"Ứng dụng cần dùng ({APP_LABELS.get(app, app)}) đang ở trước.")
+        log(f"[{task_id}] nhìn màn hình đầu tiên: tiêu đề {title!r}")
+        lines.append(f"Ảnh {self._img_w}x{self._img_h} có lưới toạ độ đỏ mỗi 100 px.")
+        messages.append({"role": "user", "content": " ".join(lines) + NT, "images": [image]})
+
     async def _already_open(self, task_id: str) -> str:
         """The window title when it shows the Word file this task is about (so it
         must not be searched for and opened again), else ""."""
         if "word" not in self._task_groups:
             return ""
         wanted = self._wanted_files()
-        screen_w, screen_h = self.relay.frame_sw, self.relay.frame_sh
-        if not (wanted and screen_w and OCR_ENABLE):
+        if not wanted:
             return ""
-        x, y, w, h = fraction_box(ZOOM_AREAS["title"], screen_w, screen_h)
-        image, _scale, native = await self._capture_region(task_id, x, y, w, h)
-        if image is None:
+        title = await self._read_title(task_id)
+        if not title:
             return ""
-        try:
-            items = await asyncio.get_running_loop().run_in_executor(
-                None, ocr.run_ocr, image if native else upscale(image), OCR_LANG)
-        except Exception as e:  # noqa: BLE001
-            log(f"[{task_id}] đọc thanh tiêu đề lỗi: {e}")
-            return ""
-        title = " ".join(it["text"] for it in items or [])
         title_key = _file_key(title)
         for key in wanted:
             if key in title_key or (len(key) > 20 and key[:20] in title_key):
@@ -861,8 +1009,14 @@ class TaskRunner(GroundingMixin):
             log(f"[{task_id}] chép trang lỗi: {e}")
             return None
         log(f"[{task_id}] model chép trang: {len(text)} ký tự, {time.monotonic() - t0:.1f}s")
-        if "KHÔNG CÓ NỘI DUNG MỚI" in text.upper():
-            return ""
+        if NOTHING_NEW in text.upper():
+            # Only "nothing new" when that is (almost) all it says: a model may add
+            # the phrase after copying a whole page.
+            rest = "\n".join(line for line in text.split("\n")
+                             if NOTHING_NEW not in line.upper()).strip()
+            if len(rest) < 15:
+                return ""
+            text = rest
         return text[:4000]
 
     async def _summarize_notes(self, notes: str) -> str:
@@ -915,6 +1069,42 @@ class TaskRunner(GroundingMixin):
         log(f"[{task_id}] tóm gọn ghi chú: {self._notes_chars} -> {len(summary)} ký tự")
         self._notes_chars = len(summary)
 
+    def _prepare_text(self, text: str) -> str:
+        """Chat apps show Markdown literally: drop its markup there."""
+        if not ({"zalo", "facebook"} & set(self._task_groups)):
+            return text
+        lines = []
+        for line in text.replace("\r\n", "\n").split("\n"):
+            line = re.sub(r"^\s*#+\s*", "", line)
+            line = re.sub(r"^(\s*)[*+]\s+", r"\1- ", line)
+            lines.append(line.replace("**", "").replace("__", "").replace("`", ""))
+        return "\n".join(lines)
+
+    def _safe_multiline(self, name: str, args: dict) -> bool:
+        """Line breaks are only risky where Enter runs a command (Run box,
+        terminal). In a chat app or Word they become shift+enter / enter."""
+        if name != "type" or not self._task_groups:
+            return False
+        flat = str(args.get("text", "")).replace("\r", " ").replace("\n", " ")
+        return not is_dangerous("type", {"text": flat})
+
+    async def _top_search_result(self, task_id: str) -> str:
+        """Name of the first result under "Best match" in Windows Search, or ""."""
+        items = await self._ocr_items(task_id) if OCR_ENABLE else None
+        if not items:
+            return ""
+        labels = [it for it in items
+                  if max(_sim(k, it["text"]) for k in SEARCH_TOP_LABELS) >= 0.8]
+        if not labels:
+            return ""
+        label = min(labels, key=lambda it: it["cy"])
+        below = [it for it in items
+                 if 0 < it["cy"] - label["cy"] <= 70 and abs(it["x0"] - label["x0"]) <= 160
+                 and it is not label]
+        if not below:
+            return ""
+        return min(below, key=lambda it: it["cy"])["text"].strip(" '\"")
+
     async def _look_before_enter(self, task_id: str) -> str:
         """Enter right after typing into Windows Search opens whatever happens to
         be first, often a web search or the wrong file. Show the results first."""
@@ -923,6 +1113,19 @@ class TaskRunner(GroundingMixin):
         shot = await self._screenshot(task_id, force=True, attach=True)
         if self._pending_image is None:
             return f"error: chưa nhấn Enter; cần xem kết quả tìm kiếm trước ({shot})"
+        top = await self._top_search_result(task_id)
+        if top and self._search_query and _same_name(self._search_query, top):
+            log(f"[{task_id}] kết quả đầu '{top}' khớp '{self._search_query}' -> nhấn Enter")
+            try:
+                res = await self.relay.call_device("key", {"name": "enter"}, task_id,
+                                                   timeout=DEVICE_TIMEOUT)
+            except Exception as e:  # noqa: BLE001
+                return f"error: {e}"
+            self._invalidate_screen_cache()
+            if not res.get("ok"):
+                return f"error: {res.get('error', 'thất bại')}"
+            return (f"ok: kết quả đầu tiên '{top}' khớp từ khóa '{self._search_query}', đã nhấn "
+                    "Enter để mở. Screenshot để xác minh.")
         return ("error: CHƯA nhấn Enter. Đã chụp kết quả tìm kiếm của Windows (ảnh ở lượt "
                 "sau). Đúng MỘT file/app khớp và nó đứng đầu → `key enter`; nằm ở dòng khác → "
                 "`tap` vào nó; nhiều kết quả giống nhau → `ask_user`; không có → thử từ khóa "

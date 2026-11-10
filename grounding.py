@@ -721,8 +721,12 @@ class GroundingMixin:
         except Exception as e:  # noqa: BLE001
             return f"error: {e}"
         if res.get("ok"):
+            where = ""
+            if self._img_w and self._scr_w:   # the units the model reads off the grid
+                where = (f" tại điểm ({round(sx * self._img_w / self._scr_w)},"
+                         f"{round(sy * self._img_h / self._scr_h)}) trên ảnh")
             self._invalidate_screen_cache()
-            return f"ok: đã click '{target}' ({how}) tại ({sx},{sy}) — screenshot để xác minh"
+            return f"ok: đã click '{target}' ({how}){where} — screenshot để xác minh"
         return f"error: {res.get('error', 'click thất bại')}"
 
     async def _finish_tap(self, task_id: str, target: str, sx: int, sy: int, how: str,
@@ -897,8 +901,12 @@ class GroundingMixin:
             if not any(certain(r) for r in readings):
                 readings.append(await self._read_crop_vision(task_id, png))
             if any(certain(r) for r in readings):
-                log(f"[{task_id}] đọc lại xác nhận tên {names} tại '{box['text']}'")
-                return NameResolution("certain", box, res.candidates)
+                confirmed = next(r for r in readings if certain(r)).strip()
+                log(f"[{task_id}] đọc lại xác nhận tên {names} tại '{box['text']}' "
+                    f"(đọc lại: '{confirmed}')")
+                fixed = dict(box, text=confirmed)   # options and logs show the real name
+                candidates = [fixed if c is box else c for c in res.candidates]
+                return NameResolution("certain", fixed, candidates)
         return res
 
     def _in_search_region(self, sx: int, sy: int, region) -> bool:

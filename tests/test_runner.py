@@ -40,6 +40,7 @@ def make_runner(monkeypatch, relay=None):
     # Transcribing pages would spend the scripted LLM replies; tests that cover it
     # switch it back on.
     monkeypatch.setattr(runner, "READ_NOTES", "ocr")
+    monkeypatch.setattr(runner, "FIRST_LOOK", False)   # FakeRelay cannot take shots
     return runner.TaskRunner(relay or FakeRelay())
 
 

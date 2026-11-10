@@ -141,6 +141,10 @@ NATIVE_CAPTURE = os.environ.get("NATIVE_CAPTURE", "true").lower() in ("1", "true
 READ_NOTES = os.environ.get("READ_NOTES", "both").lower()
 # Above this many characters of page notes, the model condenses them.
 NOTES_MAX_CHARS = int(os.environ.get("NOTES_MAX_CHARS", "6000"))
+# Take a screenshot and read the window title as soon as a task that works on the
+# screen starts, so earlier context or cached workflows are checked against what
+# is really in front instead of being trusted.
+FIRST_LOOK = os.environ.get("FIRST_LOOK", "true").lower() in ("1", "true", "yes")
 SCREEN_CACHE_TTL = float(os.environ.get("SCREEN_CACHE_TTL_SECONDS", "6.0"))
 OCR_CACHE_TTL = float(os.environ.get("OCR_CACHE_TTL_SECONDS", "6.0"))
 SCREEN_MUTATING_TOOLS = frozenset({
