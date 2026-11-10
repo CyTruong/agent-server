@@ -79,8 +79,10 @@ class GroundingMixin:
         if not SAVE_IMAGES or not data:
             return
         try:
-            os.makedirs(IMAGE_DIR, exist_ok=True)
-            fn = os.path.join(IMAGE_DIR,
+            device_id = getattr(self, "device_id", "")
+            folder = os.path.join(IMAGE_DIR, self._safe_tag(device_id)) if device_id else IMAGE_DIR
+            os.makedirs(folder, exist_ok=True)
+            fn = os.path.join(folder,
                               f"{time.strftime('%H%M%S')}_{task_id}_{self._safe_tag(tag)}.{ext}")
             with open(fn, "wb") as f:
                 f.write(data)

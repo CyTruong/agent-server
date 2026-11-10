@@ -120,6 +120,12 @@ CACHE_MAX_AGE_DAYS = int(os.environ.get("TASK_CACHE_MAX_AGE_DAYS", "30"))
 # How long ask_user waits for the user's answer. The wait does not count toward
 # TASK_TIMEOUT_SECONDS.
 CHOICE_TIMEOUT = float(os.environ.get("CHOICE_TIMEOUT_SECONDS", "180"))
+# Short-term context: the last CONTEXT_TURNS finished requests of a device, if
+# younger than CONTEXT_TTL_SECONDS, are shown to the next request so it can say
+# "sửa file đó" or "nhắn thêm cho anh ấy". Memory only, never written to disk.
+CONTEXT_TTL = float(os.environ.get("CONTEXT_TTL_SECONDS", "900"))
+CONTEXT_TURNS = int(os.environ.get("CONTEXT_TURNS", "3"))
+CONTEXT_RESULT_CHARS = int(os.environ.get("CONTEXT_RESULT_CHARS", "600"))
 SCREEN_CACHE_TTL = float(os.environ.get("SCREEN_CACHE_TTL_SECONDS", "6.0"))
 OCR_CACHE_TTL = float(os.environ.get("OCR_CACHE_TTL_SECONDS", "6.0"))
 SCREEN_MUTATING_TOOLS = frozenset({

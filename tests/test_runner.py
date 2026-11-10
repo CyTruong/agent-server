@@ -35,7 +35,6 @@ class FakeRelay:
 
 
 def make_runner(monkeypatch, relay=None):
-    monkeypatch.setattr(runner, "UI_LOGS", False)
     monkeypatch.setattr(runner, "CACHE_ENABLED", False)
     monkeypatch.setattr(runner, "PLAN_ENABLE", False)
     return runner.TaskRunner(relay or FakeRelay())

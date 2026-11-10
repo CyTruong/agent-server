@@ -32,13 +32,13 @@ def test_verified_needs_a_screenshot_after_the_last_action(steps, expected):
 def test_old_unverified_row_is_deleted_and_not_returned(tmp_path):
     cache = task_cache.TaskCache(tmp_path / "c.sqlite3")
     with cache._connect() as db:
-        db.execute("INSERT INTO task_workflows (intent, skills, workflow, verified, created_at, "
+        db.execute("INSERT INTO task_workflows_v2 (intent, skills, workflow, verified, created_at, "
                    "last_used_at) VALUES ('gui loi chao', '', "
                    "'[{\"tool\":\"screenshot\",\"arguments\":{},\"result\":\"ok\"},"
                    "{\"tool\":\"key\",\"arguments\":{},\"result\":\"ok\"}]', 1, 9e9, 9e9)")
     assert cache.retrieve("gui loi chao", []) is None
     with cache._connect() as db:
-        assert db.execute("SELECT COUNT(*) FROM task_workflows").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM task_workflows_v2").fetchone()[0] == 0
 
 
 QUOTED = 'Lời chào "Chào A Vinh, bạn có khỏe không?" đã được gửi.'

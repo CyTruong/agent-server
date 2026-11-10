@@ -8,6 +8,9 @@ request. Auto-reconnects with capped backoff.
 Message correlation: call_device() sends a `device_call` with a fresh
 request_id and awaits the matching `device_result`. Inbound `chat`/`cancel`
 (relayed from the browser via the ESP32) are handed to callbacks.
+
+Several devices can share the relay: the relay stamps each device message with
+its `device_id`, and calls/frames here are kept apart by that id.
 """
 import asyncio
 import base64
@@ -30,10 +33,10 @@ class RelayClient:
         self._ctx = ssl.create_default_context(cafile=ca_file)
         self._ws = None
         self._pending: dict[str, asyncio.Future] = {}
-        self._frame_waiters: list[tuple[str, asyncio.Future]] = []   # (request_id, future)
-        self.latest_frame: Optional[bytes] = None
-        self.frame_sw = 0   # real screen width reported with the last frame
-        self.frame_sh = 0
+        # (device_id, request_id, future) for each screenshot being waited on.
+        self._frame_waiters: list[tuple[str, str, asyncio.Future]] = []
+        # Real screen size reported with each device's last frame.
+        self._frame_sizes: dict[str, tuple[int, int]] = {}
         self.on_chat: Optional[Callable[[dict], Awaitable[None]]] = None
         self.on_cancel: Optional[Callable[[dict], Awaitable[None]]] = None
         self.on_confirm: Optional[Callable[[dict], Awaitable[None]]] = None
@@ -86,9 +89,11 @@ class RelayClient:
             await self.on_confirm(msg)
         elif mtype == "frame":
             # Firmware that tags frames lets us drop a late one from an older
-            # request; an untagged frame goes to whoever is waiting.
+            # request; an untagged frame goes to whoever waits on that device.
+            device_id = msg.get("device_id") or ""
+            mine = [w for w in self._frame_waiters if w[0] == device_id]
             rid = msg.get("request_id") or ""
-            if rid and not any(r == rid for r, _ in self._frame_waiters):
+            if rid and not any(r == rid for _, r, _ in mine):
                 return
             img = None
             b64 = msg.get("image")
@@ -97,13 +102,15 @@ class RelayClient:
                     img = base64.b64decode(b64)
                 except (ValueError, TypeError):
                     img = None
-            self.latest_frame = img
-            self.frame_sw = int(msg.get("sw") or 0)
-            self.frame_sh = int(msg.get("sh") or 0)
-            for _, fut in self._frame_waiters:
+            self._frame_sizes[device_id] = (int(msg.get("sw") or 0), int(msg.get("sh") or 0))
+            for _, _, fut in mine:
                 if not fut.done():
                     fut.set_result(img)
-            self._frame_waiters.clear()
+            self._frame_waiters = [w for w in self._frame_waiters if w[0] != device_id]
+
+    def frame_size(self, device_id: str = "") -> tuple[int, int]:
+        """(width, height) of the device's real screen, (0, 0) if not known yet."""
+        return self._frame_sizes.get(device_id, (0, 0))
 
     def _fail_pending(self, reason: str):
         for fut in self._pending.values():
@@ -112,20 +119,26 @@ class RelayClient:
         self._pending.clear()
         self._release_frame_waiters()
 
-    def _release_frame_waiters(self):
-        for _, fut in self._frame_waiters:
-            if not fut.done():
-                fut.set_result(None)
-        self._frame_waiters.clear()
+    def _release_frame_waiters(self, device_id: str | None = None):
+        """Resolve waiters with None: all of them, or one device's."""
+        keep = []
+        for waiter in self._frame_waiters:
+            if device_id is None or waiter[0] == device_id:
+                if not waiter[2].done():
+                    waiter[2].set_result(None)
+            else:
+                keep.append(waiter)
+        self._frame_waiters = keep
 
-    def arm_frame(self, request_id: str = "") -> asyncio.Future:
+    def arm_frame(self, request_id: str = "", device_id: str = "") -> asyncio.Future:
         """Register interest in the NEXT screenshot frame. Call before sending
         the screenshot device_call, then await the returned future (with your
         own timeout). Resolves to JPEG bytes, or None on failure/disconnect. Only
-        the newest request wants a frame, so earlier waiters are released."""
-        self._release_frame_waiters()
+        the newest request of a device wants a frame, so that device's earlier
+        waiters are released."""
+        self._release_frame_waiters(device_id)
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
-        self._frame_waiters.append((request_id, fut))
+        self._frame_waiters.append((device_id, request_id, fut))
         return fut
 
     async def _send(self, msg: dict):
@@ -141,19 +154,23 @@ class RelayClient:
             pass           # can also close mid-send (websockets.ConnectionClosed)
 
     async def call_device(self, tool: str, arguments: dict, task_id: str,
-                          timeout: float = 10.0, request_id: str = "") -> dict:
+                          timeout: float = 10.0, request_id: str = "",
+                          device_id: str = "") -> dict:
         """Send a device_call and await its device_result. Raises on timeout."""
         request_id = request_id or new_request_id()
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._pending[request_id] = fut
         try:
-            await self._send({
+            call = {
                 "type": "device_call",
                 "task_id": task_id,
                 "request_id": request_id,
                 "tool": tool,
                 "arguments": arguments,
-            })
+            }
+            if device_id:
+                call["device_id"] = device_id
+            await self._send(call)
             return await asyncio.wait_for(fut, timeout)
         finally:
             self._pending.pop(request_id, None)

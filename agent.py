@@ -5,7 +5,7 @@ Flow per user request (a `chat` message relayed from the browser via the ESP32):
   feed the device_result/screenshot back to the LLM -> repeat, bounded by
   MAX_STEPS / TASK_TIMEOUT, cancellable from the UI.
 
-Modules: config (env), runner (task loop), grounding (where to click), matching
+Modules: config (env), sessions (one runner per device), runner (task loop), grounding (where to click), matching
 and intents (pure heuristics), skill_select (prompt), llm (Ollama gateway),
 relay_client (WebSocket), tools (schemas and risk rules). Settings: .env.example.
 """
@@ -14,14 +14,14 @@ import asyncio
 from config import AGENT_TOKEN, CA_FILE, MODEL, OCR_ENABLE, RELAY_URL, UIA_ENABLE, \
     UIA_MARKS_ENABLE, UITARS_ENABLE, UITARS_MODEL
 from relay_client import RelayClient
-from runner import TaskRunner
+from sessions import SessionManager
 
 
 async def main():
     if not RELAY_URL or not AGENT_TOKEN:
         raise SystemExit("Thiếu RELAY_URL hoặc AGENT_TOKEN trong .env")
     relay = RelayClient(RELAY_URL, AGENT_TOKEN, CA_FILE)
-    TaskRunner(relay)  # registers chat/cancel handlers
+    SessionManager(relay)  # one TaskRunner per device; registers chat/cancel handlers
     print(f"[agent] model={MODEL} relay={RELAY_URL}")
     print(f"[agent] grounding: uia={UIA_ENABLE} uia_marks={UIA_MARKS_ENABLE} "
           f"ocr={OCR_ENABLE} ui-tars="

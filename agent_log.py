@@ -1,11 +1,14 @@
 """Console logging, mirrored to the browser chat panel."""
 import asyncio
+import contextvars
 import time
 
 from config import DEBUG
 
 _log_q = None
-_current_task = ""
+# Per asyncio task, so concurrent tasks of different devices tag their own lines.
+_task = contextvars.ContextVar("agent_task", default="")
+_device = contextvars.ContextVar("agent_device", default=None)   # None: not in a task
 
 
 def attach_queue():
@@ -15,21 +18,24 @@ def attach_queue():
     return _log_q
 
 
-def set_task(task_id: str) -> None:
-    global _current_task
-    _current_task = task_id
+def set_task(task_id: str, device_id: str = "") -> None:
+    """Tag this asyncio task's log lines. Call at the start of the task."""
+    _task.set(task_id)
+    _device.set(device_id)
 
 
 def current_task() -> str:
-    return _current_task
+    return _task.get()
 
 
 def log(msg: str):
-    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+    device_id = _device.get()
+    tag = f"[{device_id}] " if device_id else ""
+    print(f"[{time.strftime('%H:%M:%S')}] {tag}{msg}", flush=True)
     q = _log_q
     if q is not None:
         try:
-            q.put_nowait(msg)
+            q.put_nowait((device_id, _task.get(), msg))
         except Exception:  # noqa: BLE001 - queue full / not ready: drop the line
             pass
 

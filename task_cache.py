@@ -94,10 +94,13 @@ class TaskCache:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.execute("PRAGMA journal_mode=WAL")
+            # The first table had no device_id, so its rows cannot be scoped.
+            connection.execute("DROP TABLE IF EXISTS task_workflows")
             connection.execute(
                 """
-                CREATE TABLE IF NOT EXISTS task_workflows (
+                CREATE TABLE IF NOT EXISTS task_workflows_v2 (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_id TEXT NOT NULL DEFAULT '',
                     intent TEXT NOT NULL,
                     skills TEXT NOT NULL,
                     workflow TEXT NOT NULL,
@@ -105,17 +108,18 @@ class TaskCache:
                     usage_count INTEGER NOT NULL DEFAULT 0,
                     created_at REAL NOT NULL,
                     last_used_at REAL NOT NULL,
-                    UNIQUE(intent, skills)
+                    UNIQUE(device_id, intent, skills)
                 )
                 """
             )
             connection.execute(
-                "CREATE INDEX IF NOT EXISTS idx_task_workflows_verified "
-                "ON task_workflows(verified, last_used_at)"
+                "CREATE INDEX IF NOT EXISTS idx_task_workflows_v2_verified "
+                "ON task_workflows_v2(verified, last_used_at)"
             )
 
-    def retrieve(self, intent: str, skills: list[str]) -> dict[str, Any] | None:
-        """Return the best recent verified workflow, or ``None``."""
+    def retrieve(self, intent: str, skills: list[str],
+                 device_id: str = "") -> dict[str, Any] | None:
+        """Return the device's best recent verified workflow, or ``None``."""
         if not self.enabled:
             return None
         normalized = normalize_text(intent)
@@ -125,9 +129,9 @@ class TaskCache:
         skill_key = ",".join(sorted(skills))
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM task_workflows "
-                "WHERE verified = 1 AND last_used_at >= ?",
-                (cutoff,),
+                "SELECT * FROM task_workflows_v2 "
+                "WHERE verified = 1 AND last_used_at >= ? AND device_id = ?",
+                (cutoff, device_id),
             ).fetchall()
 
             best_row = None
@@ -146,13 +150,13 @@ class TaskCache:
                     best_score = score
                     best_row = row
 
-            connection.executemany("DELETE FROM task_workflows WHERE id = ?", unverified_ids)
+            connection.executemany("DELETE FROM task_workflows_v2 WHERE id = ?", unverified_ids)
 
             if best_row is None or best_score < self.threshold:
                 return None
 
             connection.execute(
-                "UPDATE task_workflows SET usage_count = usage_count + 1, "
+                "UPDATE task_workflows_v2 SET usage_count = usage_count + 1, "
                 "last_used_at = ? WHERE id = ?",
                 (time.time(), best_row["id"]),
             )
@@ -168,6 +172,7 @@ class TaskCache:
         intent: str,
         skills: list[str],
         steps: list[dict[str, Any]],
+        device_id: str = "",
     ) -> None:
         """Store a successful workflow only when the caller already verified it."""
         if not self.enabled or not steps:
@@ -184,16 +189,17 @@ class TaskCache:
         with self._connect() as connection:
             connection.execute(
                 """
-                INSERT INTO task_workflows
-                    (intent, skills, workflow, verified, usage_count,
+                INSERT INTO task_workflows_v2
+                    (device_id, intent, skills, workflow, verified, usage_count,
                      created_at, last_used_at)
-                VALUES (?, ?, ?, 1, 0, ?, ?)
-                ON CONFLICT(intent, skills) DO UPDATE SET
+                VALUES (?, ?, ?, ?, 1, 0, ?, ?)
+                ON CONFLICT(device_id, intent, skills) DO UPDATE SET
                     workflow = excluded.workflow,
                     verified = 1,
                     last_used_at = excluded.last_used_at
                 """,
                 (
+                    device_id,
                     normalized,
                     skill_key,
                     json.dumps(workflow, ensure_ascii=False),

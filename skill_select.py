@@ -149,7 +149,15 @@ def _load_all_skills(path: str = SKILLS_DIR) -> dict:
 ALL_SKILLS = _load_all_skills()
 
 
-def select_skills(text: str) -> tuple[str, list]:
+GATED_GROUPS = ("facebook", "zalo", "word")
+
+
+def gated_groups(skill_names: list) -> tuple:
+    """The app groups (facebook/zalo/word) among the loaded skills."""
+    return tuple(sorted({n.split("/", 1)[0] for n in skill_names} & set(GATED_GROUPS)))
+
+
+def select_skills(text: str, carry: tuple = ()) -> tuple[str, list]:
     """Pick common + keyword-matched skills for this request. Returns (prompt, names).
     App groups (facebook/zalo) are gated: a group's skills load only when that app
     is in scope. Naming Zalo explicitly suppresses Facebook so the two chat apps'
@@ -159,6 +167,12 @@ def select_skills(text: str) -> tuple[str, list]:
     facebook_on = (not zalo_on) and any(k in low for k in FACEBOOK_TRIGGERS)
     word_on = bool(WORD_TRIGGER.search(low)) or (
         WORD_SOFT_TRIGGER in low and not (zalo_on or facebook_on))
+    # A follow-up that names no app ("đổi TP.HCM thành Hà Nội") keeps the app of
+    # the previous request; naming an app always wins.
+    if carry and not (zalo_on or facebook_on or word_on):
+        zalo_on = "zalo" in carry
+        facebook_on = "facebook" in carry and not zalo_on
+        word_on = "word" in carry
     active = {"facebook": facebook_on, "zalo": zalo_on, "word": word_on}   # gated groups
     chosen = []
     for name, kws in SKILL_KEYWORDS.items():
@@ -175,6 +189,6 @@ def select_skills(text: str) -> tuple[str, list]:
     return "\n\n# Kỹ năng (quy trình tham khảo)\n\n" + body, chosen
 
 
-def build_system_prompt(text: str) -> tuple[str, list]:
-    skills, names = select_skills(text)
+def build_system_prompt(text: str, carry: tuple = ()) -> tuple[str, list]:
+    skills, names = select_skills(text, carry)
     return BASE_PROMPT + skills, names

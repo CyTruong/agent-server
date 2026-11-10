@@ -16,6 +16,9 @@ from config import (
     CACHE_MAX_AGE_DAYS,
     CACHE_THRESHOLD,
     CHOICE_TIMEOUT,
+    CONTEXT_RESULT_CHARS,
+    CONTEXT_TTL,
+    CONTEXT_TURNS,
     DEBUG,
     DEVICE_TIMEOUT,
     KEEP_IMAGES,
@@ -31,7 +34,6 @@ from config import (
     SEARCH_ENABLE,
     TASK_TIMEOUT,
     THINK,
-    UI_LOGS,
 )
 from grounding import GroundingMixin
 from imaging import annotate_grid, prune_images
@@ -43,9 +45,14 @@ from intents import (
     parse_yes_no,
 )
 from relay_client import RelayClient, new_request_id
-from skill_select import build_system_prompt
+from skill_select import build_system_prompt, gated_groups
 from task_cache import TaskCache, is_verified_workflow
 from tools import TOOLS, TOOL_NAMES, is_dangerous, split_for_type
+
+
+# Typed alone as a chat message, these clear the device's context.
+RESET_COMMANDS = frozenset({"bắt đầu lại", "quên hết", "xoá ngữ cảnh", "xóa ngữ cảnh",
+                            "reset", "/moi", "/new"})
 
 
 class TaskRunner(GroundingMixin):
@@ -79,23 +86,49 @@ class TaskRunner(GroundingMixin):
         self._img_w = self._img_h = 0
         self._scr_w = self._scr_h = 0
         self._tars_ok = True   # cleared if the UI-TARS model is missing this session
-        relay.on_chat = self.on_chat
-        relay.on_cancel = self.on_cancel
-        relay.on_confirm = self.on_confirm
-        if UI_LOGS:
-            self._log_queue = agent_log.attach_queue()
-            self._drain_task = asyncio.create_task(self._drain_logs())
+        # One runner per device (see sessions.SessionManager); "" = single device.
+        self.device_id = getattr(relay, "device_id", "")
+        self._history: list[dict] = []        # recent finished requests (context)
+        self._task_groups: tuple = ()          # app skill groups of the current task
+        self._last_final: dict | None = None   # last done/error event sent
 
-    async def _drain_logs(self):
-        """Forward buffered log lines to the browser as relay 'log' messages.
-        Best-effort: dropped silently when the relay is down."""
-        while True:
-            line = await self._log_queue.get()
-            try:
-                await self.relay.send_ui({"type": "log", "task_id": agent_log.current_task(),
-                                          "text": line})
-            except Exception:  # noqa: BLE001
-                pass
+    async def _ui(self, msg: dict):
+        """Send an event to this device's browser, remembering the final one."""
+        if msg.get("type") in ("done", "error"):
+            self._last_final = msg
+        await self.relay.send_ui(msg)
+
+    def _recent_history(self) -> list:
+        """Recent requests to show the next one; empty when context is disabled
+        (CONTEXT_TTL_SECONDS or CONTEXT_TURNS set to 0)."""
+        if CONTEXT_TTL <= 0 or CONTEXT_TURNS <= 0:
+            return []
+        now = time.monotonic()
+        self._history = [h for h in self._history if now - h["at"] <= CONTEXT_TTL]
+        return self._history[-CONTEXT_TURNS:]
+
+    @staticmethod
+    def _history_note(history: list) -> str:
+        now = time.monotonic()
+        lines = ["Ngữ cảnh: các yêu cầu GẦN ĐÂY trên máy này (cũ → mới). Dùng để hiểu yêu cầu "
+                 "mới nếu nó nói tiếp việc trước (vd 'sửa file đó', 'nhắn thêm cho anh ấy'). Màn "
+                 "hình có thể đã thay đổi: screenshot kiểm tra trước khi thao tác. Yêu cầu mới "
+                 "là việc khác thì bỏ qua ngữ cảnh này."]
+        for index, item in enumerate(history, 1):
+            minutes = int((now - item["at"]) // 60)
+            lines.append(f"{index}. ({minutes} phút trước) Yêu cầu: {item['request']}\n"
+                         f"   Kết quả: {item['result'] or '(không có)'}")
+        return "\n".join(lines)
+
+    def _remember(self, task_id: str, text: str) -> None:
+        final = self._last_final if (self._last_final or {}).get("task_id") == task_id else {}
+        result = final.get("result") or final.get("error") or ""
+        if not isinstance(result, str):
+            result = str(result)
+        self._history.append({"at": time.monotonic(), "request": text,
+                              "result": clip(result, CONTEXT_RESULT_CHARS),
+                              "groups": self._task_groups})
+        self._history = self._history[-max(CONTEXT_TURNS, 1):]
 
     async def on_chat(self, msg: dict):
         text = msg.get("text", "").strip()
@@ -106,8 +139,13 @@ class TaskRunner(GroundingMixin):
             self._choice.set_result(text)   # the answer to ask_user, not a new task
             return
         if self._active and not self._active.done():
-            await self.relay.send_ui({"type": "error", "task_id": task_id,
+            await self._ui({"type": "error", "task_id": task_id,
                                       "error": "một tác vụ khác đang chạy"})
+            return
+        if text.casefold().strip(" .!") in RESET_COMMANDS:
+            self._history.clear()
+            await self._ui({"type": "done", "task_id": task_id,
+                            "result": "Đã xoá ngữ cảnh các yêu cầu trước."})
             return
         self._active = asyncio.create_task(self.run_task(task_id, text))
 
@@ -116,10 +154,10 @@ class TaskRunner(GroundingMixin):
             self._active.cancel()   # stops LLM waits, confirms and pending clicks now
         # Tell the device to flush its queue too, not just stop the agent.
         try:
-            await self.relay.send_ui({"type": "cancel", "task_id": msg.get("task_id", "")})
+            await self._ui({"type": "cancel", "task_id": msg.get("task_id", "")})
         except Exception:  # noqa: BLE001
             pass
-        await self.relay.send_ui({"type": "cancel_ack", "task_id": msg.get("task_id", "")})
+        await self._ui({"type": "cancel_ack", "task_id": msg.get("task_id", "")})
 
     async def on_confirm(self, msg: dict):
         """UI answered a confirm_request; resolve the waiting _ask_confirm."""
@@ -161,7 +199,7 @@ class TaskRunner(GroundingMixin):
         return annotated, (width, height)
 
     async def _progress(self, task_id: str, step: int, message: str):
-        await self.relay.send_ui({"type": "progress", "task_id": task_id,
+        await self._ui({"type": "progress", "task_id": task_id,
                                   "step": step, "max_steps": MAX_STEPS, "message": message})
 
     def _record_verified_cache(self, text: str, skill_names: list[str]) -> None:
@@ -169,7 +207,8 @@ class TaskRunner(GroundingMixin):
         if not is_verified_workflow(self._executed_steps):
             return
         try:
-            self.task_cache.record_verified(text, skill_names, self._executed_steps)
+            self.task_cache.record_verified(text, skill_names, self._executed_steps,
+                                            device_id=self.device_id)
             log("workflow cache: saved verified task")
         except Exception as exc:  # noqa: BLE001
             log(f"workflow cache: save failed: {exc}")
@@ -177,6 +216,8 @@ class TaskRunner(GroundingMixin):
     async def run_task(self, task_id: str, text: str):
         """Run one request; whatever happens the UI gets a final event. Time spent
         waiting for the user's answer does not count toward TASK_TIMEOUT."""
+        agent_log.set_task(task_id, self.device_id)   # inherited by the inner task
+        self._task_groups = ()
         inner = asyncio.ensure_future(self._execute(task_id, text))
         self._deadline = time.monotonic() + TASK_TIMEOUT
         try:
@@ -191,28 +232,35 @@ class TaskRunner(GroundingMixin):
             inner.result()
         except asyncio.TimeoutError:
             log(f"[{task_id}] task timeout after {TASK_TIMEOUT}s")
-            await self.relay.send_ui({"type": "done", "task_id": task_id,
+            await self._ui({"type": "done", "task_id": task_id,
                                       "result": "hết thời gian"})
         except asyncio.CancelledError:
             inner.cancel()
             await asyncio.wait({inner})
             log(f"[{task_id}] cancelled")
-            await self.relay.send_ui({"type": "done", "task_id": task_id,
+            await self._ui({"type": "done", "task_id": task_id,
                                       "result": "đã huỷ"})
         except Exception as e:  # noqa: BLE001 - never die without telling the UI
             log(f"[{task_id}] task crashed:\n{traceback.format_exc()}")
-            await self.relay.send_ui({"type": "error", "task_id": task_id,
+            await self._ui({"type": "error", "task_id": task_id,
                                       "error": f"lỗi nội bộ: {e}"})
+        finally:
+            self._remember(task_id, text)
 
     async def _execute(self, task_id: str, text: str):
-        agent_log.set_task(task_id)
-        sys_prompt, skill_names = build_system_prompt(text)
+        history = self._recent_history()
+        carry = history[-1]["groups"] if history else ()
+        sys_prompt, skill_names = build_system_prompt(text, carry)
+        self._task_groups = gated_groups(skill_names)
         self._task_text = text
         self._executed_steps = []
         self._approved_names = set()
-        messages = [{"role": "system", "content": sys_prompt},
-                    {"role": "user", "content": text + NT}]
-        cache_match = self.task_cache.retrieve(text, skill_names)
+        messages = [{"role": "system", "content": sys_prompt}]
+        if history:
+            messages.append({"role": "user", "content": self._history_note(history) + NT})
+            log(f"[{task_id}] ngữ cảnh: {len(history)} yêu cầu trước, nhóm skill {carry}")
+        messages.append({"role": "user", "content": text + NT})
+        cache_match = self.task_cache.retrieve(text, skill_names, device_id=self.device_id)
         if cache_match:
             messages.append({
                 "role": "user",
@@ -257,13 +305,13 @@ class TaskRunner(GroundingMixin):
                 dt = time.monotonic() - t0
             except asyncio.TimeoutError:
                 log(f"[{task_id}] LLM timeout sau {LLM_TIMEOUT}s (Ollama kẹt/đang tải model?)")
-                await self.relay.send_ui({"type": "error", "task_id": task_id,
+                await self._ui({"type": "error", "task_id": task_id,
                                           "error": f"LLM quá {LLM_TIMEOUT}s không phản hồi "
                                                    "(kiểm tra Ollama: 'ollama ps', VRAM, num_ctx)"})
                 return
             except Exception as e:  # noqa: BLE001
                 log(f"[{task_id}] LLM error: {e}")
-                await self.relay.send_ui({"type": "error", "task_id": task_id,
+                await self._ui({"type": "error", "task_id": task_id,
                                           "error": f"LLM lỗi: {e}"})
                 return
 
@@ -321,7 +369,7 @@ class TaskRunner(GroundingMixin):
                         result += " (chưa xác minh được trên màn hình)"
                     log(f"[{task_id}] DONE: {result[:160]}")
                     self._record_verified_cache(text, skill_names)
-                    await self.relay.send_ui({"type": "done", "task_id": task_id,
+                    await self._ui({"type": "done", "task_id": task_id,
                                               "result": result})
                     return
                 # Completely empty reply: nudge once or twice before giving up,
@@ -329,7 +377,7 @@ class TaskRunner(GroundingMixin):
                 empties += 1
                 if empties >= 3:
                     log(f"[{task_id}] DONE: empty {empties}x, giving up")
-                    await self.relay.send_ui({"type": "done", "task_id": task_id,
+                    await self._ui({"type": "done", "task_id": task_id,
                                               "result": "(model không phản hồi sau nhiều lần nhắc)"})
                     return
                 log(f"[{task_id}] empty reply ({empties}) -> nudging")
@@ -373,7 +421,7 @@ class TaskRunner(GroundingMixin):
                                      "images": [self._pending_image]})
                     self._pending_image = None
 
-        await self.relay.send_ui({"type": "done", "task_id": task_id,
+        await self._ui({"type": "done", "task_id": task_id,
                                   "result": f"đạt giới hạn {MAX_STEPS} bước"})
 
     async def _run_tool(self, task_id: str, name: str, args: dict) -> str:
@@ -470,7 +518,7 @@ class TaskRunner(GroundingMixin):
         lines = [question] + [f"{i}. {o}" for i, o in enumerate(options, 1)]
         lines.append("(Trả lời bằng số thứ tự.)" if options else "(Trả lời trong ô chat.)")
         self._choice = asyncio.get_running_loop().create_future()
-        await self.relay.send_ui({"type": "assistant", "task_id": task_id,
+        await self._ui({"type": "assistant", "task_id": task_id,
                                   "content": "\n".join(lines), "options": options})
         log(f"[{task_id}] hỏi người dùng: {question} {options}")
         try:
@@ -630,7 +678,7 @@ class TaskRunner(GroundingMixin):
         cid = f"{task_id}:{name}:{time.time()}"
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._confirm_waiters[cid] = fut
-        await self.relay.send_ui({"type": "confirm_request", "task_id": task_id,
+        await self._ui({"type": "confirm_request", "task_id": task_id,
                                   "confirm_id": cid, "tool": name, "arguments": args,
                                   "message": message or f"Xác nhận hành động: {name} {args}"})
         # on_confirm() resolves this future when the UI answers. No answer in 60s
